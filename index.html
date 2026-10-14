@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Jacquard+24&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=6">
+<link rel="stylesheet" href="css/style.css?v=11">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0b10'/%3E%3Cpath d='M6 28V12a10 10 0 0 1 20 0v16' fill='none' stroke='%23c43c68' stroke-width='3'/%3E%3Ccircle cx='16' cy='21' r='3' fill='%23e3b04b'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -23,6 +23,7 @@
     <div><dt>Raid</dt><dd id="st-raid">1</dd></div>
     <div class="gold"><dt>Hoard</dt><dd id="st-gold">100</dd></div>
     <div class="malice"><dt>Malice</dt><dd id="st-malice">0</dd></div>
+    <div class="rating"><dt>Guild rating</dt><dd id="st-rating">F</dd></div>
     <div class="steel"><dt>Guild map</dt><dd id="st-known">0%</dd></div>
   </dl>
   <button type="button" class="ghost menu" id="menu">New dungeon</button>
@@ -32,11 +33,14 @@
   <aside class="panel blueprints" id="blueprints" aria-label="Blueprints">
     <h2>Blueprints</h2>
     <div class="tools" id="tools"></div>
+    <div class="detail" id="detail" aria-live="polite"></div>
     <h3>Always in stock</h3>
     <div class="cards" id="basic"></div>
     <h3>Tonight’s offers</h3>
     <div class="cards" id="offers"></div>
-    <div class="detail" id="detail" aria-live="polite"></div>
+    <h3>Bosses</h3>
+    <div class="cards" id="bosses"></div>
+    <p class="unlock" id="unlock"></p>
   </aside>
 
   <section class="stage">
@@ -49,6 +53,7 @@
         </div>
       </div>
     </div>
+    <div class="floors" id="floors" role="group" aria-label="Floors"></div>
     <div class="board-wrap" id="board-wrap">
       <canvas id="board" aria-label="The dungeon map"></canvas>
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -82,8 +87,9 @@
       <ul class="rumors" id="rumors"></ul>
     </section>
     <section>
-      <h3>Raid log</h3>
+      <h3 id="log-h">Raid log</h3>
       <ol class="log" id="log"></ol>
+      <button type="button" class="ghost small" id="reports">Raid reports</button>
     </section>
   </aside>
 </main>
@@ -92,10 +98,10 @@
   <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"></div>
 </div>
 
-<script src="js/data.js?v=6"></script>
-<script src="js/world.js?v=6"></script>
-<script src="js/sim.js?v=6"></script>
-<script src="js/render.js?v=6"></script>
-<script src="js/ui.js?v=6"></script>
+<script src="js/data.js?v=11"></script>
+<script src="js/world.js?v=11"></script>
+<script src="js/sim.js?v=11"></script>
+<script src="js/render.js?v=11"></script>
+<script src="js/ui.js?v=11"></script>
 </body>
 </html>

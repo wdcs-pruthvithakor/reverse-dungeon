@@ -1,41 +1,49 @@
 'use strict';
-// The dungeon itself: grid helpers, map generation, building rules, guild knowledge, party generation.
+// The dungeon itself: grid helpers, floors and stairs, map generation, building rules,
+// guild knowledge, the guild's rating of your dungeon, and party generation.
 (function () {
   const RD = window.RD;
-  const { COLS, ROWS, N } = RD;
+  const { COLS, ROWS, N, MAX_FLOORS } = RD;
+  const NN = N * MAX_FLOORS;
 
   // ---------------------------------------------------------------- grid helpers
-  const idx = (x, y) => y * COLS + x;
-  const xy = (i) => [i % COLS, (i / COLS) | 0];
+  // A tile id is global: floor * N + local index. Floors share one coordinate grid.
+  const idx = (x, y, f) => (f || 0) * N + y * COLS + x;
+  const xy = (g) => { const i = g % N; return [i % COLS, (i / COLS) | 0]; };
+  const fl = (g) => (g / N) | 0;
   RD.idx = idx;
   RD.xy = xy;
-  RD.coord = (i) => {
-    const [x, y] = xy(i);
-    return String.fromCharCode(65 + x) + (y + 1);
-  };
-  RD.isBorder = (i) => {
-    const [x, y] = xy(i);
+  RD.fl = fl;
+  RD.cell = (g) => { const [x, y] = xy(g); return String.fromCharCode(65 + x) + (y + 1); };
+  RD.coord = (g) => (RD.G && RD.G.floors > 1 ? RD.ROMAN[fl(g)] + '·' : '') + RD.cell(g);
+  RD.isBorder = (g) => {
+    const [x, y] = xy(g);
     return x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1;
   };
-  const NB = new Array(N);
-  for (let i = 0; i < N; i++) {
-    const [x, y] = xy(i);
+  const NB = new Array(NN);
+  for (let g = 0; g < NN; g++) {
+    const [x, y] = xy(g);
     const out = [];
-    if (x > 0) out.push(i - 1);
-    if (x < COLS - 1) out.push(i + 1);
-    if (y > 0) out.push(i - COLS);
-    if (y < ROWS - 1) out.push(i + COLS);
-    NB[i] = out;
+    if (x > 0) out.push(g - 1);
+    if (x < COLS - 1) out.push(g + 1);
+    if (y > 0) out.push(g - COLS);
+    if (y < ROWS - 1) out.push(g + COLS);
+    NB[g] = out;
   }
-  RD.nb = (i) => NB[i];
+  RD.nb = (g) => NB[g];
+  // neighbours including a staircase link
+  RD.adj = (G, g) => { const l = G.links.get(g); return l == null ? NB[g] : NB[g].concat(l); };
   RD.tdist = (a, b) => {
+    if (fl(a) !== fl(b)) return Infinity;
     const [ax, ay] = xy(a);
     const [bx, by] = xy(b);
     return Math.hypot(ax - bx, ay - by);
   };
 
-  // Line of sight between tile centres; every tile strictly between must be floor.
+  // Line of sight between tile centres on one floor; every tile strictly between must be floor.
   RD.los = function (tiles, a, b) {
+    const f = fl(a);
+    if (f !== fl(b)) return false;
     let [x0, y0] = xy(a);
     const [x1, y1] = xy(b);
     const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
@@ -43,7 +51,7 @@
     let err = dx + dy;
     for (;;) {
       if (x0 === x1 && y0 === y1) return true;
-      const i = idx(x0, y0);
+      const i = idx(x0, y0, f);
       if (i !== a && tiles[i] === 0) return false;
       const e2 = 2 * err;
       if (e2 >= dy) { err += dy; x0 += sx; }
@@ -51,52 +59,85 @@
     }
   };
 
-  // Plain Dijkstra; the grid is 187 tiles so a linear scan is plenty.
-  RD.dijkstra = function (start, cost) {
-    const dist = new Float32Array(N).fill(Infinity);
-    const prev = new Int16Array(N).fill(-1);
-    const done = new Uint8Array(N);
-    dist[start] = 0;
-    for (;;) {
-      let u = -1, best = Infinity;
-      for (let i = 0; i < N; i++) if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
-      if (u < 0) break;
-      done[u] = 1;
-      for (const v of NB[u]) {
-        if (done[v]) continue;
-        const c = cost(v);
-        if (c === Infinity) continue;
-        if (best + c < dist[v]) { dist[v] = best + c; prev[v] = u; }
+  // Dijkstra over every open floor with a small binary heap. `linkOk(g)` gates staircases.
+  RD.dijkstra = function (G, start, cost, linkOk) {
+    const M = G.floors * N;
+    const dist = new Float32Array(M).fill(Infinity);
+    const prev = new Int16Array(M).fill(-1);
+    const hk = [], hv = [];
+    const push = (k, v) => {
+      let i = hk.length;
+      hk.push(k); hv.push(v);
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (hk[p] <= k) break;
+        hk[i] = hk[p]; hv[i] = hv[p]; i = p;
       }
+      hk[i] = k; hv[i] = v;
+    };
+    const pop = () => {
+      const top = hv[0];
+      const k = hk.pop(), v = hv.pop();
+      if (hk.length) {
+        let i = 0;
+        for (;;) {
+          const l = 2 * i + 1, r = l + 1;
+          let m = i, mk = k;
+          if (l < hk.length && hk[l] < mk) { m = l; mk = hk[l]; }
+          if (r < hk.length && hk[r] < mk) { m = r; mk = hk[r]; }
+          if (m === i) break;
+          hk[i] = hk[m]; hv[i] = hv[m]; i = m;
+        }
+        hk[i] = k; hv[i] = v;
+      }
+      return top;
+    };
+    dist[start] = 0;
+    push(0, start);
+    const relax = (u, v) => {
+      const c = cost(v);
+      if (c === Infinity) return;
+      const d = dist[u] + c;
+      if (d < dist[v]) { dist[v] = d; prev[v] = u; push(d, v); }
+    };
+    const seen = new Uint8Array(M);
+    while (hk.length) {
+      const u = pop();
+      if (seen[u]) continue;
+      seen[u] = 1;
+      for (const v of NB[u]) if (v < M) relax(u, v);
+      const l = G.links.get(u);
+      if (l != null && (!linkOk || linkOk(u))) relax(u, l);
     }
     return { dist, prev };
   };
 
-  // First step from `from` toward `to` over floor tiles (monsters ignore doors). -1 if none.
+  // First step from `from` toward `to` over floor tiles on one floor (monsters ignore doors). -1 if none.
   RD.bfsStep = function (tiles, from, to) {
-    if (from === to) return -1;
+    if (from === to || fl(from) !== fl(to)) return -1;
+    const base = fl(from) * N;
     const prev = new Int16Array(N).fill(-1);
-    prev[from] = from;
+    prev[from - base] = from - base;
     const q = [from];
     for (let h = 0; h < q.length; h++) {
       const u = q[h];
       if (u === to) break;
-      for (const v of NB[u]) if (prev[v] < 0 && tiles[v] === 1) { prev[v] = u; q.push(v); }
+      for (const v of NB[u]) if (prev[v - base] < 0 && tiles[v] === 1) { prev[v - base] = u - base; q.push(v); }
     }
-    if (prev[to] < 0) return -1;
-    let s = to;
-    while (prev[s] !== from) s = prev[s];
-    return s;
+    if (prev[to - base] < 0) return -1;
+    let s = to - base;
+    while (prev[s] !== from - base) s = prev[s];
+    return s + base;
   };
 
-  RD.reachable = function (tiles, from, to) {
-    const seen = new Uint8Array(N);
+  RD.reachable = function (G, tiles, from, to) {
+    const seen = new Uint8Array(G.floors * N);
     seen[from] = 1;
     const q = [from];
     for (let h = 0; h < q.length; h++) {
       const u = q[h];
       if (u === to) return true;
-      for (const v of NB[u]) if (!seen[v] && tiles[v] === 1) { seen[v] = 1; q.push(v); }
+      for (const v of RD.adj(G, u)) if (v < seen.length && !seen[v] && tiles[v] === 1) { seen[v] = 1; q.push(v); }
     }
     return false;
   };
@@ -104,23 +145,31 @@
   // ---------------------------------------------------------------- map generation
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
-  RD.genMap = function (rng) {
+  // One floor, as local tiles. The top floor starts at the outer wall; deeper floors start at the foot of the stairs.
+  RD.genMap = function (rng, deep) {
     const tiles = new Uint8Array(N);
-    const side = rng.pick(['W', 'E', 'N', 'S']);
-    let ex, ey, hx, hy;
-    if (side === 'W') { ex = 0; ey = rng.int(2, ROWS - 3); hx = rng.int(COLS - 5, COLS - 2); hy = rng.int(1, ROWS - 2); }
-    if (side === 'E') { ex = COLS - 1; ey = rng.int(2, ROWS - 3); hx = rng.int(1, 4); hy = rng.int(1, ROWS - 2); }
-    if (side === 'N') { ey = 0; ex = rng.int(2, COLS - 3); hy = rng.int(ROWS - 4, ROWS - 2); hx = rng.int(1, COLS - 2); }
-    if (side === 'S') { ey = ROWS - 1; ex = rng.int(2, COLS - 3); hy = rng.int(1, 3); hx = rng.int(1, COLS - 2); }
-    const entrance = idx(ex, ey);
-    const hoard = idx(hx, hy);
+    const li = (x, y) => y * COLS + x;
+    let ex, ey, hx, hy, side = null;
+    if (!deep) {
+      side = rng.pick(['W', 'E', 'N', 'S']);
+      if (side === 'W') { ex = 0; ey = rng.int(2, ROWS - 3); hx = rng.int(COLS - 5, COLS - 2); hy = rng.int(1, ROWS - 2); }
+      if (side === 'E') { ex = COLS - 1; ey = rng.int(2, ROWS - 3); hx = rng.int(1, 4); hy = rng.int(1, ROWS - 2); }
+      if (side === 'N') { ey = 0; ex = rng.int(2, COLS - 3); hy = rng.int(ROWS - 4, ROWS - 2); hx = rng.int(1, COLS - 2); }
+      if (side === 'S') { ey = ROWS - 1; ex = rng.int(2, COLS - 3); hy = rng.int(1, 3); hx = rng.int(1, COLS - 2); }
+    } else {
+      ex = rng.int(2, COLS - 3); ey = rng.int(2, ROWS - 3);
+      hx = ex < COLS / 2 ? rng.int(COLS - 5, COLS - 2) : rng.int(1, 4);
+      hy = ey < ROWS / 2 ? rng.int(ROWS - 4, ROWS - 2) : rng.int(1, 3);
+    }
+    const entrance = li(ex, ey);
+    const hoard = li(hx, hy);
     const clampIn = (x, y) => [Math.max(1, Math.min(COLS - 2, x)), Math.max(1, Math.min(ROWS - 2, y))];
-    const carve = (x, y) => { tiles[idx(x, y)] = 1; };
+    const carve = (x, y) => { tiles[li(x, y)] = 1; };
     tiles[entrance] = 1;
     let cx = ex + (side === 'W' ? 1 : side === 'E' ? -1 : 0);
     let cy = ey + (side === 'N' ? 1 : side === 'S' ? -1 : 0);
     carve(cx, cy);
-    const spine = [idx(cx, cy)];
+    const spine = [li(cx, cy)];
     let last = null, guard = 0;
     while ((cx !== hx || cy !== hy) && guard++ < 500) {
       let d;
@@ -132,7 +181,7 @@
       [cx, cy] = clampIn(cx + d[0], cy + d[1]);
       last = d;
       carve(cx, cy);
-      spine.push(idx(cx, cy));
+      spine.push(li(cx, cy));
     }
     while (cx !== hx) { cx += Math.sign(hx - cx); carve(cx, cy); }
     while (cy !== hy) { cy += Math.sign(hy - cy); carve(cx, cy); }
@@ -140,10 +189,11 @@
     // side passages, some of them dead ends worth baiting
     const branches = rng.int(3, 5);
     for (let b = 0; b < branches; b++) {
-      let [bx, by] = xy(rng.pick(spine));
+      const s = rng.pick(spine);
+      let bx = s % COLS, by = (s / COLS) | 0;
       let d = rng.pick(DIRS);
       const len = rng.int(3, 8);
-      for (let s = 0; s < len; s++) {
+      for (let k = 0; k < len; k++) {
         if (rng.chance(0.3)) d = rng.pick(DIRS);
         [bx, by] = clampIn(bx + d[0], by + d[1]);
         carve(bx, by);
@@ -152,27 +202,29 @@
     // a chamber or two
     const rooms = rng.int(1, 2);
     for (let r = 0; r < rooms; r++) {
-      const [rx, ry] = xy(rng.pick(spine));
+      const s = rng.pick(spine);
+      const rx = s % COLS, ry = (s / COLS) | 0;
       const w = rng.int(2, 3), h = rng.int(2, 3);
       for (let y = ry; y < ry + h; y++) for (let x = rx; x < rx + w; x++) {
         const [px, py] = clampIn(x, y);
         carve(px, py);
       }
     }
-    // never leave the entrance row open on the outer wall except the entrance itself
+    // the outer wall stays solid except the front gate
     for (let i = 0; i < N; i++) if (RD.isBorder(i) && i !== entrance) tiles[i] = 0;
     return { tiles, entrance, hoard };
   };
 
   // ---------------------------------------------------------------- guild knowledge
   RD.newKnow = () => ({
-    tiles: new Int8Array(N).fill(-1),
+    tiles: new Int8Array(NN).fill(-1),
     traps: new Map(), // tile -> { type, off }
     turrets: new Map(), // tile -> type
     lairs: new Map(), // tile -> monster type
     doors: new Set(),
     chests: new Set(),
     mimics: new Set(),
+    stairs: new Set(), // staircases down that someone has seen
     hoard: -1,
     shifts: 0,
     removed: new Set(), // 'kind:tile' facts that turned out false this raid
@@ -187,6 +239,7 @@
     doors: new Set(K.doors),
     chests: new Set(K.chests),
     mimics: new Set(K.mimics),
+    stairs: new Set(K.stairs),
     hoard: K.hoard,
     shifts: K.shifts,
     removed: new Set(K.removed),
@@ -194,13 +247,14 @@
   });
 
   RD.mergeKnow = function (into, from) {
-    for (let i = 0; i < N; i++) if (from.tiles[i] !== -1) into.tiles[i] = from.tiles[i];
+    for (let i = 0; i < NN; i++) if (from.tiles[i] !== -1) into.tiles[i] = from.tiles[i];
     for (const [k, v] of from.traps) into.traps.set(k, { ...v });
     for (const [k, v] of from.turrets) into.turrets.set(k, v);
     for (const [k, v] of from.lairs) into.lairs.set(k, v);
     for (const k of from.doors) into.doors.add(k);
     for (const k of from.chests) into.chests.add(k);
     for (const k of from.mimics) into.mimics.add(k);
+    for (const k of from.stairs) into.stairs.add(k);
     for (const key of from.removed) {
       const [kind, s] = key.split(':');
       const t = +s;
@@ -218,28 +272,30 @@
     return into;
   };
 
-  // How dangerous each tile looks to the guild: turret lanes and monster posts.
+  // How dangerous each tile looks to the guild: turret lanes and monster posts, weighted by rank.
   RD.hazard = function (K) {
-    const hz = new Float32Array(N);
-    for (const [t] of K.turrets) {
-      const [x0, y0] = xy(t);
+    const hz = new Float32Array(NN);
+    for (const [t, type] of K.turrets) {
+      const [x0, y0] = xy(t), f = fl(t);
+      const d = RD.ITEMS[type];
       for (const [dx, dy] of DIRS) {
-        for (let s = 1; s <= RD.ITEMS.darts.range; s++) {
+        for (let s = 1; s <= d.range; s++) {
           const x = x0 + dx * s, y = y0 + dy * s;
           if (x < 0 || y < 0 || x >= COLS || y >= ROWS) break;
-          const j = idx(x, y);
+          const j = idx(x, y, f);
           if (K.tiles[j] === 0) break;
-          hz[j] += 1;
+          hz[j] += 1 + 0.5 * d.tier;
         }
       }
     }
     for (const [t, type] of K.lairs) {
       if (type === 'mimic') continue;
-      const w = type === 'brute' ? 2.2 : type === 'slime' ? 0.8 : 1;
-      const r = RD.ITEMS[type].leash;
-      for (let j = 0; j < N; j++) {
-        const d = RD.tdist(t, j);
-        if (d <= r) hz[j] += w * (1 - d / (r + 1));
+      const d = RD.ITEMS[type];
+      const w = (d.boss ? 2.5 : d.elite ? 1.8 : 1) * (1 + 0.5 * d.tier);
+      const r = d.leash, base = fl(t) * N;
+      for (let j = base; j < base + N; j++) {
+        const dd = RD.tdist(t, j);
+        if (dd <= r) hz[j] += w * (1 - dd / (r + 1));
       }
     }
     return hz;
@@ -247,7 +303,7 @@
 
   RD.coverage = function (G, K) {
     let floor = 0, known = 0;
-    for (let i = 0; i < N; i++) {
+    for (let i = 0; i < G.floors * N; i++) {
       if (RD.isBorder(i)) continue;
       floor++;
       if (K.tiles[i] !== -1) known++;
@@ -255,75 +311,138 @@
     return known / floor;
   };
 
+  // ---------------------------------------------------------------- unlocks
+  RD.unlocked = (G) => {
+    let t = 0;
+    while (t < RD.MAX_TIER && G.raid >= RD.TIER_UNLOCK[t + 1]) t++;
+    return t;
+  };
+  RD.nextUnlock = (G) => {
+    const t = RD.unlocked(G) + 1;
+    if (t > RD.MAX_TIER) return null;
+    return { tier: t, night: RD.TIER_UNLOCK[t], items: Object.keys(RD.ITEMS).filter((k) => RD.ITEMS[k].tier === t && !RD.ITEMS[k].summonOnly) };
+  };
+  RD.winAt = (G) => RD.DIFF[G.diff].win;
+
+  // ---------------------------------------------------------------- the guild's rating of your dungeon
+  // The guild only rates what it has seen. A strong piece nobody escaped from is a secret.
+  RD.assess = function (G) {
+    const K = G.guild.K;
+    let seen = 0, why = null;
+    const consider = (v, type, tile) => { if (v > seen) { seen = v; why = { type, tile }; } };
+    for (const [t, type] of K.lairs) { const d = RD.ITEMS[type]; consider(d.tier + (d.boss ? 1 : d.elite ? 0.6 : 0.2), type, t); }
+    for (const t of K.mimics) consider(RD.ITEMS.mimic.tier + 0.6, 'mimic', t);
+    for (const [t, v] of K.traps) consider(RD.ITEMS[v.type].tier - 0.3, v.type, t);
+    for (const [t, type] of K.turrets) consider(RD.ITEMS[type].tier, type, t);
+    const D = RD.DIFF[G.diff];
+    const base = 0.27 * (G.raid - 1) * D.drift;
+    // the guild never sends more than about one rank above what the dungeon could have built
+    const cap = RD.unlocked(G) + 0.45;
+    const threat = Math.max(0, Math.min(cap, Math.max(base, seen) + G.guild.pressure));
+    return { threat, seen, base, why };
+  };
+  RD.rating = (threat) => RD.TIERS[Math.max(0, Math.min(RD.MAX_TIER, Math.round(threat)))];
+
   // ---------------------------------------------------------------- game state
-  RD.newGame = function (seed) {
+  RD.newGame = function (seed, diff) {
+    diff = RD.DIFF[diff] ? diff : 'normal';
+    const D = RD.DIFF[diff];
     const rng = RD.makeRng(seed);
-    const map = RD.genMap(rng);
+    const map = RD.genMap(rng, false);
+    const tiles = new Uint8Array(NN);
+    tiles.set(map.tiles, 0);
     const G = {
-      seed, rng,
-      tiles: map.tiles, entrance: map.entrance, hoard: map.hoard,
+      seed, rng, diff,
+      floors: 1, tiles, gates: [map.entrance], stairs: [], links: new Map(),
+      entrance: map.entrance, hoard: map.hoard,
       items: new Map(),
-      malice: 120, gold: 100, raid: 1, phase: 'build', endless: false,
+      malice: D.malice, gold: D.gold, raid: 1, phase: 'build', endless: false,
       guild: {
         K: RD.newKnow(),
         causes: { trap: 0, illusion: 0, monster: 0, turret: 0 },
-        wariness: 0,
+        pressure: 0, threat: 0, wariness: 0,
         veterans: [],
         rumors: [],
       },
       party: [], omen: null, offers: [], sale: null, adapt: '',
-      stats: { slain: 0, escaped: 0, goldLost: 0, held: 0 },
-      nextId: 1, debrief: null, R: null,
+      stats: { slain: 0, escaped: 0, goldLost: 0, held: 0, legends: 0 },
+      nextId: 1, history: [], debrief: null, R: null,
     };
     RD.G = G;
     RD.beginBuild(G, true);
     return G;
   };
 
+  function linkFloors(G) {
+    G.links = new Map();
+    for (let f = 0; f < G.floors - 1; f++) {
+      const a = f * N + G.stairs[f], b = (f + 1) * N + G.gates[f + 1];
+      G.links.set(a, b);
+      G.links.set(b, a);
+    }
+  }
+  RD.isStairs = (G, g) => G.links.has(g);
+  RD.isGate = (G, g) => g === G.entrance || (fl(g) > 0 && G.gates[fl(g)] === g % N);
+
   // ---------------------------------------------------------------- save / load
   // Only build-phase state is saved. `pending` marks a save taken at dawn, before the next night was rolled.
-  const packKnow = (K) => ({
-    tiles: Array.from(K.tiles), traps: [...K.traps], turrets: [...K.turrets], lairs: [...K.lairs],
-    doors: [...K.doors], chests: [...K.chests], mimics: [...K.mimics],
+  const packKnow = (K, M) => ({
+    tiles: Array.from(K.tiles.subarray(0, M)), traps: [...K.traps], turrets: [...K.turrets], lairs: [...K.lairs],
+    doors: [...K.doors], chests: [...K.chests], mimics: [...K.mimics], stairs: [...(K.stairs || [])],
     hoard: K.hoard, shifts: K.shifts, removed: [...K.removed],
   });
-  const unpackKnow = (o) => ({
-    tiles: Int8Array.from(o.tiles), traps: new Map(o.traps), turrets: new Map(o.turrets), lairs: new Map(o.lairs),
-    doors: new Set(o.doors), chests: new Set(o.chests), mimics: new Set(o.mimics),
-    hoard: o.hoard, shifts: o.shifts, removed: new Set(o.removed), hz: null,
-  });
+  const unpackKnow = (o) => {
+    const K = RD.newKnow();
+    K.tiles.set(Int8Array.from(o.tiles), 0);
+    K.traps = new Map(o.traps); K.turrets = new Map(o.turrets); K.lairs = new Map(o.lairs);
+    K.doors = new Set(o.doors); K.chests = new Set(o.chests); K.mimics = new Set(o.mimics); K.stairs = new Set(o.stairs || []);
+    K.hoard = o.hoard; K.shifts = o.shifts; K.removed = new Set(o.removed);
+    return K;
+  };
 
   RD.saveGame = function (G, pending) {
-    const g = G.guild;
+    const g = G.guild, M = G.floors * N;
     return {
-      v: 1, pending: !!pending,
+      v: 2, pending: !!pending, diff: G.diff,
       seed: G.seed, rng: G.rng.state(),
-      tiles: Array.from(G.tiles), entrance: G.entrance, hoard: G.hoard,
-      items: [...G.items.values()].map((it) => ({ type: it.type, tile: it.tile, rank: it.rank || 1, paid: it.paid || 0 })),
+      floors: G.floors, tiles: Array.from(G.tiles.subarray(0, M)), gates: G.gates, stairs: G.stairs,
+      entrance: G.entrance, hoard: G.hoard,
+      items: [...G.items.values()].map((it) => ({ type: it.type, tile: it.tile, lv: it.lv || 1, paid: it.paid || 0 })),
       malice: G.malice, gold: G.gold, raid: G.raid, endless: G.endless,
-      guild: { K: packKnow(g.K), causes: g.causes, wariness: g.wariness, veterans: g.veterans, rumors: g.rumors },
+      guild: { K: packKnow(g.K, M), causes: g.causes, pressure: g.pressure, threat: g.threat, wariness: g.wariness, veterans: g.veterans, rumors: g.rumors },
       party: pending ? [] : G.party, omen: G.omen && G.omen.id, offers: G.offers, sale: G.sale, adapt: G.adapt,
-      stats: G.stats, nextId: G.nextId,
+      stats: G.stats, nextId: G.nextId, history: G.history,
     };
   };
 
   RD.loadGame = function (o) {
-    if (!o || o.v !== 1) return null;
+    if (!o || (o.v !== 1 && o.v !== 2)) return null;
+    const v1 = o.v === 1;
     const rng = RD.makeRng(o.seed);
     rng.setState(o.rng);
     const items = new Map();
-    for (const s of o.items) { const it = { type: s.type, tile: s.tile, rank: s.rank || 1, paid: s.paid || 0 }; freshItem(it); items.set(it.tile, it); }
+    for (const s of o.items) {
+      if (!RD.ITEMS[s.type]) continue;
+      const it = { type: s.type, tile: s.tile, lv: Math.min(RD.MAX_LEVEL, s.lv || s.rank || 1), paid: s.paid || 0 };
+      freshItem(it);
+      items.set(it.tile, it);
+    }
+    const tiles = new Uint8Array(NN);
+    tiles.set(Uint8Array.from(o.tiles), 0);
     const G = {
-      seed: o.seed, rng,
-      tiles: Uint8Array.from(o.tiles), entrance: o.entrance, hoard: o.hoard,
+      seed: o.seed, rng, diff: RD.DIFF[o.diff] ? o.diff : 'normal',
+      floors: o.floors || 1, tiles, gates: o.gates || [o.entrance], stairs: o.stairs || [], links: new Map(),
+      entrance: o.entrance, hoard: o.hoard,
       items, malice: o.malice, gold: o.gold, raid: o.raid, phase: 'build', endless: o.endless,
-      guild: { ...o.guild, K: unpackKnow(o.guild.K) },
+      guild: { pressure: 0, threat: 0, wariness: 0, ...o.guild, K: unpackKnow(o.guild.K) },
       party: o.party, omen: RD.OMENS.find((m) => m.id === o.omen) || RD.OMENS[0],
-      offers: o.offers, sale: o.sale, adapt: o.adapt,
-      stats: o.stats, nextId: o.nextId, debrief: null, R: null,
+      offers: (o.offers || []).filter((t) => RD.ITEMS[t]), sale: o.sale, adapt: o.adapt,
+      stats: { ...o.stats, legends: o.stats.legends || 0 }, nextId: o.nextId, history: o.history || [], debrief: null, R: null,
     };
+    linkFloors(G);
     RD.G = G;
     if (o.pending) RD.nextNight(G);
+    else if (v1) RD.beginBuild(G, false, true); // old heroes had no rank: hire tonight's party again
     return G;
   };
 
@@ -332,20 +451,26 @@
     it.cd = 0;
     it.spent = false;
     it.off = false;
-    if (d.kind === 'door') { it.hp = d.hp * RD.rankMult(it); it.pick = 0; it.broken = false; }
+    if (d.kind === 'door') { it.hp = RD.scaled(it.type, 'hp', it.lv); it.pick = 0; it.broken = false; }
   }
 
-  RD.beginBuild = function (G, first) {
+  RD.beginBuild = function (G, first, keepOmen) {
     G.phase = 'build';
     G.R = null;
     for (const it of G.items.values()) freshItem(it);
     const rng = G.rng;
-    G.omen = first ? RD.OMENS[0] : rng.pick(RD.OMENS.slice(G.raid < 3 ? 1 : 0));
-    G.offers = rng.shuffle(RD.SPECIAL.slice()).slice(0, first ? 2 : 3);
-    G.sale = rng.pick(G.offers);
-    if (G.omen.id === 'tithe') G.malice += 30;
-    if (G.omen.id === 'leak') RD.leakSurvey(G, 8);
-    G.party = RD.genParty(G);
+    if (!keepOmen) {
+      G.omen = first ? RD.OMENS[0] : rng.pick(RD.OMENS.slice(G.raid < 3 ? 1 : 0));
+      const top = RD.unlocked(G);
+      const pool = RD.SPECIAL.filter((k) => RD.ITEMS[k].tier <= top);
+      G.offers = rng.shuffle(pool).slice(0, 3);
+      G.sale = G.offers.length ? rng.pick(G.offers) : null;
+      if (G.omen.id === 'tithe') G.malice += 30;
+      if (G.omen.id === 'leak') RD.leakSurvey(G, 8);
+    }
+    const a = RD.assess(G);
+    G.guild.threat = a.threat;
+    G.party = RD.genParty(G, a);
   };
 
   RD.costOf = function (G, type) {
@@ -356,13 +481,14 @@
   RD.leakSurvey = function (G, n) {
     const K = G.guild.K;
     const pool = [];
-    for (let i = 0; i < N; i++) if (!RD.isBorder(i) && K.tiles[i] === -1) pool.push(i);
+    for (let i = 0; i < G.floors * N; i++) if (!RD.isBorder(i) && K.tiles[i] === -1) pool.push(i);
     G.rng.shuffle(pool);
     for (const i of pool.slice(0, n)) {
       K.tiles[i] = G.tiles[i];
       const it = G.items.get(i);
       if (it) RD.learnItem(K, it);
       if (i === G.hoard) K.hoard = i;
+      if (G.links.has(i) && fl(G.links.get(i)) > fl(i)) K.stairs.add(i);
     }
     K.hz = null;
   };
@@ -379,54 +505,107 @@
     K.hz = null;
   };
 
+  // ---------------------------------------------------------------- floors
+  RD.canOpenFloor = function (G) {
+    if (G.phase !== 'build') return 'Only between raids.';
+    if (G.floors >= MAX_FLOORS) return 'The dungeon is as deep as it goes.';
+    const night = RD.FLOOR_UNLOCK[G.floors];
+    if (G.raid < night) return `Floor ${RD.ROMAN[G.floors]} can be dug from night ${night}.`;
+    const c = RD.FLOOR_COST[G.floors];
+    if (G.malice < c) return `Needs ${c} malice. You have ${G.malice}.`;
+    return null;
+  };
+
+  // Dig a new floor below the deepest one. The stairs go at the far end of the floor above,
+  // and the hoard is carried down to the new floor for free.
+  RD.openFloor = function (G) {
+    const err = RD.canOpenFloor(G);
+    if (err) return { err };
+    const f = G.floors;
+    const map = RD.genMap(G.rng, true);
+    G.tiles.set(map.tiles, f * N);
+    // stairs: the reachable empty tile on the floor above that is farthest from its own gate
+    const above = f - 1, from = above * N + G.gates[above];
+    const dist = new Int16Array(N).fill(-1);
+    dist[from - above * N] = 0;
+    const q = [from];
+    let best = -1, bd = -1;
+    for (let h = 0; h < q.length; h++) {
+      const u = q[h];
+      const d = dist[u - above * N];
+      if (u !== from && !G.items.has(u) && !G.links.has(u) && d > bd) { bd = d; best = u; }
+      for (const v of NB[u]) if (dist[v - above * N] < 0 && G.tiles[v] === 1) { dist[v - above * N] = d + 1; q.push(v); }
+    }
+    G.malice -= RD.FLOOR_COST[f];
+    G.stairs[above] = best % N;
+    G.gates[f] = map.entrance;
+    G.floors++;
+    linkFloors(G);
+    G.hoard = f * N + map.hoard;
+    return { floor: f, stairs: best };
+  };
+
   // ---------------------------------------------------------------- building rules
-  const nearEntrance = (G, i) => RD.tdist(i, G.entrance) < 1.5;
+  const nearEntrance = (G, g) => RD.tdist(g, G.entrance) < 1.5;
+  const special = (G, g) => RD.isStairs(G, g) || RD.isGate(G, g);
 
   RD.check = function (G, tool, i, from) {
     if (G.phase !== 'build') return 'Building is only possible between raids.';
+    if (fl(i) >= G.floors) return 'That floor has not been dug yet.';
     const it = G.items.get(i);
     const floor = G.tiles[i] === 1;
     if (tool === 'dig') {
       if (floor) return 'Already a corridor.';
       if (RD.isBorder(i)) return 'The outer wall holds the mountain up.';
-      if (it) return 'Sell the dart slit first.';
+      if (it) return 'Sell the piece in this rock first.';
       return afford(G, tool);
     }
     if (tool === 'fill') {
       if (!floor) return 'Already rock.';
-      if (i === G.entrance) return 'The entrance stays open.';
+      if (special(G, i)) return 'The gate and the stairs stay open.';
       if (i === G.hoard) return 'Move the hoard first.';
       if (it) return 'Clear this tile first.';
       const t = G.tiles.slice();
       t[i] = 0;
-      if (!RD.reachable(t, G.entrance, G.hoard)) return 'That would seal the hoard off.';
+      if (!RD.reachable(G, t, G.entrance, G.hoard)) return 'That would seal the hoard off.';
       return afford(G, tool);
     }
     if (tool === 'sell') return it ? null : 'Nothing here to sell.';
     if (tool === 'upgrade') {
-      if (!it) return 'Pick a placed piece to upgrade.';
-      const c = RD.upgradeCost(it);
-      return G.malice >= c ? null : `Rank ${(it.rank || 1) + 1} needs ${c} malice. You have ${G.malice}.`;
+      if (!it) return 'Pick a placed piece to level up.';
+      if ((it.lv || 1) >= RD.MAX_LEVEL) return `Already Lv${RD.MAX_LEVEL}, the most a ${RD.TIERS[RD.ITEMS[it.type].tier]}-rank piece can reach.`;
+      const c = RD.levelCost(it);
+      return G.malice >= c ? null : `Lv${(it.lv || 1) + 1} needs ${c} malice. You have ${G.malice}.`;
     }
     if (tool === 'move' && from == null) return it ? null : 'Pick a piece to move.';
     if (tool === 'hoard') {
       if (!floor) return 'The hoard needs a floor.';
       if (i === G.hoard) return 'The hoard is already here.';
       if (it) return 'Clear this tile first.';
+      if (special(G, i)) return 'Keep the hoard off the stairs.';
       if (nearEntrance(G, i)) return 'Too close to the entrance.';
       return afford(G, tool);
     }
     // placing a piece (tool is an item type, or 'move' with from set)
     const type = tool === 'move' ? G.items.get(from).type : tool;
     const d = RD.ITEMS[type];
+    if (tool !== 'move' && d.tier > RD.unlocked(G)) return `${RD.TIERS[d.tier]}-rank pieces unlock on night ${RD.TIER_UNLOCK[d.tier]}.`;
     if (it && i !== from) return 'Something already stands here.';
+    if (d.boss) {
+      for (const o of G.items.values()) {
+        if (o.tile === from || !RD.ITEMS[o.type].boss) continue;
+        if (d.lord && RD.ITEMS[o.type].lord) return 'There can only be one Demon Lord.';
+        if (fl(o.tile) === fl(i)) return `Floor ${RD.ROMAN[fl(i)]} already has a boss (${RD.ITEMS[o.type].name}).`;
+      }
+    }
     if (d.place === 'wall') {
-      if (floor) return 'Dart slits go into rock beside a corridor.';
-      if (!RD.nb(i).some((j) => G.tiles[j] === 1 && j !== G.entrance)) return 'There is no corridor beside this rock.';
+      if (floor) return `${d.name}s go into rock beside a corridor.`;
+      if (!RD.nb(i).some((j) => G.tiles[j] === 1 && !RD.isGate(G, j))) return 'There is no corridor beside this rock.';
     } else {
       if (!floor) return 'This needs a corridor tile.';
       if (i === G.hoard) return 'The hoard is here.';
-      if (i === G.entrance || nearEntrance(G, i)) return 'Leave the threshold clear.';
+      if (special(G, i)) return 'Keep the stairs clear.';
+      if (nearEntrance(G, i)) return 'Leave the threshold clear.';
     }
     return tool === 'move' ? null : afford(G, tool);
   };
@@ -450,12 +629,12 @@
     }
     if (tool === 'upgrade') {
       const it = G.items.get(i);
-      const c = RD.upgradeCost(it);
-      it.rank = (it.rank || 1) + 1;
+      const c = RD.levelCost(it);
+      it.lv = (it.lv || 1) + 1;
       it.paid = (it.paid || 0) + c;
       freshItem(it);
       G.malice -= c;
-      return { spent: c, rank: it.rank };
+      return { spent: c, lv: it.lv };
     }
     if (tool === 'hoard') { G.hoard = i; G.malice -= RD.costOf(G, 'hoard'); return { spent: RD.costOf(G, 'hoard') }; }
     if (tool === 'move') {
@@ -466,11 +645,38 @@
       return { moved: true };
     }
     const cost = RD.costOf(G, tool);
-    const it = { type: tool, tile: i, rank: 1, paid: 0 };
+    const it = { type: tool, tile: i, lv: 1, paid: 0 };
     freshItem(it);
     G.items.set(i, it);
     G.malice -= cost;
     return { spent: cost };
+  };
+
+  // Every number a piece will fight with, for the detail panel.
+  RD.pieceStats = function (type, lv) {
+    const d = RD.ITEMS[type];
+    const s = (k) => Math.round(RD.scaled(type, k, lv));
+    const rows = [];
+    if (d.hp != null) rows.push(['Health', s('hp')]);
+    if (d.dmg != null) rows.push([d.kind === 'monster' ? 'Hit' : 'Damage', s('dmg')]);
+    if (d.rate) rows.push(['Attacks', 'every ' + d.rate + 's']);
+    if (d.dmg != null && d.rate) rows.push(['Damage / s', Math.round(RD.scaled(type, 'dmg', lv) / d.rate)]);
+    if (d.dps) rows.push(['Poison / s', s('dps')]);
+    if (d.breath) rows.push([d.lord ? 'Hellfire' : 'Breath', `${s('breath')} every ${d.every}s`]);
+    if (d.quake) rows.push(['Quake', `${s('quake')} + knockdown every ${d.every}s`]);
+    if (d.pct) rows.push(['Drains', Math.round(d.pct * 100) + '% of health']);
+    if (d.regen) rows.push(['Regrows', (d.regen * 100).toFixed(1) + '% / s']);
+    if (d.summon) rows.push(['Summons', `${RD.ITEMS[d.summon].name} every ${d.every || 5}s (max ${d.max})`]);
+    if (d.heads) rows.push(['Bites', `${d.heads} heroes at once`]);
+    if (d.range && d.kind === 'monster') rows.push(['Reach', d.range + ' tiles']);
+    if (d.range && d.kind === 'turret') rows.push(['Range', d.range + ' tiles']);
+    if (d.leash) rows.push(['Guards', d.leash + ' tiles']);
+    if (d.root) rows.push(['Pins', d.root + 's']);
+    if (d.slow) rows.push(['Slows', d.slow + 's']);
+    if (d.stun) rows.push(['Stuns', d.stun + 's']);
+    if (d.confuse) rows.push(['Confuses', d.confuse + 's']);
+    if (d.rearm) rows.push(['Rearms', d.rearm + 's']);
+    return rows;
   };
 
   // ---------------------------------------------------------------- parties
@@ -497,24 +703,28 @@
     return out;
   }
 
-  RD.makeHero = function (G, cls, vet, used) {
+  RD.makeHero = function (G, cls, tier, vet, used) {
     const C = RD.CLASSES[cls];
+    const D = RD.DIFF[G.diff];
     const rng = G.rng;
     const lvl = vet ? vet.lvl + 1 : 1;
     const traits = vet ? vet.traits.slice() : rollTraits(rng);
     const has = (t) => traits.includes(t);
-    const scale = 1 + 0.11 * (G.raid - 1) + 0.15 * (lvl - 1);
+    const endless = 1 + Math.max(0, G.raid - D.win) * 0.05;
+    const grace = Math.min(1, 0.8 + 0.05 * G.raid); // the first few parties are green
+    const scale = RD.TIER_MULT[tier] * D.hero * (1 + 0.1 * (lvl - 1)) * endless * grace;
     const h = {
       id: G.nextId++,
       name: vet ? vet.name : heroName(rng, used),
-      cls, lvl, traits,
+      title: C.unique ? RD.TITLES[cls] : '',
+      cls, tier, lvl, traits,
       maxHp: Math.round(C.hp * scale * (has('stout') ? 1.25 : 1)),
       speed: C.speed * (has('swift') ? 1.2 : 1),
-      dmg: C.dmg * (1 + 0.06 * (G.raid - 1) + 0.1 * (lvl - 1)),
+      dmg: C.dmg * scale,
       rate: C.rate, range: C.range, vision: C.vision,
       brave: C.brave + (has('reckless') ? 0.3 : 0),
       greed: C.greed + (has('greedy') ? 0.5 : 0) + (G.omen && G.omen.id === 'bounty' ? 0.3 : 0),
-      fleeAt: has('coward') ? 0.5 : has('reckless') ? 0.1 : C.fleeAt,
+      fleeAt: cls === 'chosen' ? 0 : has('coward') ? 0.5 : has('reckless') ? 0.1 : C.fleeAt,
       reck: has('reckless') ? 0.6 : 0,
       seed: (rng.next() * 100000) | 0,
     };
@@ -522,44 +732,74 @@
     return h;
   };
 
-  RD.genParty = function (G) {
-    const rng = G.rng, gu = G.guild;
-    let n = Math.min(9, 2 + Math.floor((G.raid - 1) * 0.75));
+  RD.genParty = function (G, a) {
+    const rng = G.rng, gu = G.guild, D = RD.DIFF[G.diff];
+    a = a || RD.assess(G);
+    const cap = Math.min(8, RD.unlocked(G) + 1);
+    const T = Math.min(cap, a.threat);
+    let n = Math.max(2, Math.min(8, 3 + Math.floor((G.raid - 1) / 5) + (G.raid > 5 ? D.party : 0)));
+    if (G.raid === 1) n = Math.max(2, n - 1);
     if (G.omen.id === 'bounty') n++;
+    const roll = () => Math.max(0, Math.min(cap, Math.round(T) + +rng.weighted({ '-1': 0.3, 0: 0.58, 1: 0.12 })));
     const c = gu.causes;
-    const w = { knight: 3, rogue: 2, mage: 1.4, cleric: 1.2, scout: 1.6 };
-    w.rogue += c.trap * 0.7;
-    w.mage += c.illusion * 0.9;
-    w.knight += c.monster * 0.45 + c.turret * 0.6;
-    w.cleric += c.monster * 0.5;
-    w.scout += (1 - RD.coverage(G, gu.K)) * 2 + gu.wariness * 2;
+    const w = {};
+    for (const k of RD.COMMON) w[k] = RD.CLASSES[k].w;
+    w.rogue += c.trap * 0.5;
+    w.mage += c.illusion * 0.7;
+    w.knight += c.monster * 0.35 + c.turret * 0.45;
+    w.cleric += c.monster * 0.4;
+    w.scout += (1 - RD.coverage(G, gu.K)) * 2 + (gu.wariness || 0) * 2;
     const used = new Set();
     const party = [];
+    let legend = false;
+    const hire = (cls, tier, vet) => {
+      const h = RD.makeHero(G, cls, tier, vet, used);
+      if (RD.CLASSES[cls].unique) legend = true;
+      party.push(h);
+      return h;
+    };
+    // a demon lord in the guild's books means the Chosen Hero walks in
+    const lordKnown = [...gu.K.lairs.values()].some((t) => RD.ITEMS[t].lord);
+    if (lordKnown) hire('chosen', Math.max(7, Math.min(8, Math.round(T))));
     for (const v of rng.shuffle(gu.veterans.slice())) {
       if (party.length >= n - 1) break;
       if (rng.chance(0.6)) {
-        party.push(RD.makeHero(G, v.cls, v, used));
+        hire(v.cls, Math.min(cap, v.tier + (rng.chance(0.4) ? 1 : 0)), v);
         gu.veterans.splice(gu.veterans.indexOf(v), 1);
       }
     }
-    if (G.omen.id === 'pilgrims') party.push(RD.makeHero(G, 'cleric', null, used));
+    if (G.omen.id === 'pilgrims') hire('cleric', roll());
     // the guild always hires at least one counter to whatever killed the most heroes
-    const top = Object.entries(c).sort((a, b) => b[1] - a[1])[0];
+    const top = Object.entries(c).sort((x, y) => y[1] - x[1])[0];
     const counter = { trap: 'rogue', illusion: 'mage', monster: rng.pick(['knight', 'cleric']), turret: 'knight' }[top[0]];
-    if (top[1] > 0 && party.length < n && !party.some((h) => h.cls === counter)) party.push(RD.makeHero(G, counter, null, used));
-    while (party.length < n) party.push(RD.makeHero(G, rng.weighted(w), null, used));
+    if (top[1] > 0 && party.length < n && !party.some((h) => h.cls === counter)) hire(counter, roll());
+    while (party.length < n) {
+      const t = roll();
+      let cls = rng.weighted(w);
+      if (!legend && rng.chance(0.045 * D.rare * (1 + 0.2 * t))) {
+        const pool = {};
+        for (const u of RD.UNIQUE) if (u !== 'chosen' && RD.CLASSES[u].minTier <= t) pool[u] = RD.CLASSES[u].w;
+        if (t >= RD.CLASSES.chosen.minTier) pool.chosen = RD.CLASSES.chosen.w;
+        if (Object.keys(pool).length) cls = rng.weighted(pool);
+      }
+      hire(cls, t);
+    }
 
-    // explain the guild's thinking in one line
+    // explain the guild's thinking
+    const L = RD.rating(T);
     const why = {
       trap: 'Traps killed the most heroes, so the guild hires rogues.',
       illusion: 'Illusions killed the most heroes, so the guild hires mages.',
       monster: 'Your monsters killed the most heroes, so the guild sends knights and clerics.',
-      turret: 'Dart slits killed the most heroes, so the guild sends heavier armour.',
+      turret: 'Wall traps killed the most heroes, so the guild sends heavier armour.',
     };
-    if (G.raid === 1) G.adapt = 'The guild knows nothing about you yet. They send a small party to look around.';
-    else if (gu.wariness > 0.35 && rng.chance(0.5)) G.adapt = 'The guild has noticed your walls move. They send scouts to re-check the map.';
-    else if (top[1] > 0) G.adapt = why[top[0]];
-    else G.adapt = 'No one has died to you yet. The guild is getting bold.';
+    let line;
+    if (G.raid === 1) line = 'The guild knows nothing about you yet. They send a small party to look around.';
+    else if (a.why && a.seen >= a.base && a.seen > 0.5) line = `They saw the ${RD.ITEMS[a.why.type].name.toLowerCase()} at ${RD.coord(a.why.tile)} and rated the dungeon to match.`;
+    else if (gu.pressure > 0.3) line = 'Too many of their own have died here. They are sending stronger blades.';
+    else if (top[1] > 0) line = why[top[0]];
+    else line = 'No one has died to you yet. The guild is getting bold.';
+    G.adapt = `Guild rating: ${L}-rank. ${line}${lordKnown ? ' The Chosen Hero has answered the call.' : ''}`;
     return party;
   };
 })();

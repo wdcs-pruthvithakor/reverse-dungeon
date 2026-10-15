@@ -36,6 +36,7 @@
   const omen = (G, id) => G.omen && G.omen.id === id;
   const scaleOf = (h) => h.dmg / RD.CLASSES[h.cls].dmg; // rank × difficulty × veteran bonus
   const label = (h) => `${h.name}${h.title ? ' ' + h.title : ''}`;
+  const sfx = (name) => { if (RD.sfx) RD.sfx(name); }; // audio.js may not be loaded (headless runs)
 
   function log(R, text, tone) {
     R.log.unshift({ t: R.t, text, tone });
@@ -45,11 +46,11 @@
   // ---------------------------------------------------------------- start
   function mkMonster(type, home, lv, tier, item) {
     const d = RD.ITEMS[type];
-    const m = RD.TIER_MULT[tier] * RD.levelMult(lv);
+    const hp = RD.scaled(type, 'hp', lv, tier);
     const [x, y] = center(home);
     return {
       type, d, item, home, tile: home, x, y, next: -1, tier, lv,
-      hp: d.hp * m, maxHp: d.hp * m, dmg: d.dmg * m, mult: m,
+      hp, maxHp: hp, dmg: RD.scaled(type, 'dmg', lv, tier),
       cd: 0, abT: d.every ? d.every * 0.5 : 0, sumT: d.every || 5, minions: 0,
       dead: false, dormant: type === 'mimic', lunge: 0, face: 1,
     };
@@ -84,6 +85,7 @@
       checked: new Set(), visited: new Set(), seen: R.feud ? new Set() : R.seen,
       cd: 0, stun: 0, rootT: 0, confuse: 0, slowT: 0, carry: 0, lootT: 0,
       doorAt: -1, disarmAt: -1, disarmT: 0, cat: 'trap', said: 0, bob: Math.random() * 6, revived: false,
+      xp: 0, charted: 0, hurtTaken: 0, cureT: 0,
     });
     R.heroes.push(h);
     reveal(G, R, h);
@@ -115,6 +117,7 @@
         h.seen.add(j);
         const truth = G.tiles[j];
         if (K.tiles[j] !== truth) {
+          if (K.tiles[j] === -1) h.charted++;
           if (K.tiles[j] !== -1) { K.shifts++; if (truth === 0) K.removed.add('tile:' + j); }
           K.tiles[j] = truth;
           K.hz = null;
@@ -179,6 +182,7 @@
             h.K.removed.delete('trap:' + j);
             h.K.hz = null;
             RD.floater(cx, cy, 'spotted', '#9cc0e6', false, f);
+            sfx('spot');
             log(R, `${h.name} spots a ${d.name.toLowerCase()} at ${RD.coord(j)}.`, 'hero');
           }
         }
@@ -225,6 +229,12 @@
   function chooseGoal(G, R, h, dist, probe) {
     const K = h.K;
     if (h.state === 'escape' || h.state === 'flee') return G.entrance;
+    if (h.hunt != null) {
+      const prey = R.monsters.find((m) => m.home === h.hunt && m.d.boss && !m.dead);
+      if (!prey) h.hunt = null;
+      else if (prey.tile < dist.length && dist[prey.tile] < Infinity && prey.tile !== h.tile) return prey.tile;
+      else if (h.hunt < dist.length && dist[h.hunt] < Infinity && h.hunt !== h.tile) return h.hunt;
+    }
     if (h.greed >= 0.6) {
       let best = -1, bd = 6 + h.greed * 4;
       for (const c of K.chests) {
@@ -335,6 +345,10 @@
   // ---------------------------------------------------------------- traps
   const heroesNear = (R, f, x, y, r) => R.heroes.filter((o) => alive(o) && fl(o.tile) === f && Math.hypot(o.x - x, o.y - y) <= r);
 
+  // A hero far above a trap's rank shakes off part of its pin, daze, slow or stun.
+  const resist = (h, d) => Math.max(0.35, Math.min(1, 1 - 0.2 * (h.tier - d.tier - 1)));
+  const hold = (h, d, key, lv) => RD.lvDur(d, key, lv) * resist(h, d);
+
   function trigger(G, R, h, it) {
     const d = RD.ITEMS[it.type];
     const kt = h.K.traps.get(it.tile);
@@ -344,7 +358,8 @@
     const ash = omen(G, 'ash') ? 0.5 : 1;
     const dmg = d.dmg != null ? RD.scaled(it.type, 'dmg', it.lv) : 0;
     const where = RD.coord(it.tile);
-    if (d.rearm) it.cd = d.rearm * ash;
+    if (d.rearm) it.cd = RD.lvRearm(d, it.lv) * ash;
+    sfx({ spikes: 'trap', snare: 'trap', rune: 'fire', chasm: 'crush', crusher: 'crush', vent: 'hiss', maze: 'daze', frost: 'frost', siphon: 'daze', abyss: 'summon' }[it.type]);
     switch (it.type) {
       case 'spikes':
         hurt(G, R, h, dmg * (known ? 0.5 : 1), 'trap');
@@ -353,7 +368,7 @@
         break;
       case 'snare':
         hurt(G, R, h, dmg, 'trap');
-        h.rootT = d.root;
+        h.rootT = hold(h, d, 'root', it.lv);
         RD.burst(x, y, '#8a8090', 8, 1.5, f);
         log(R, `Iron jaws close on ${h.name} at ${where}.`, 'hit');
         break;
@@ -367,7 +382,7 @@
         break;
       case 'chasm':
         hurt(G, R, h, dmg * (known ? 0.4 : 1), 'illusion');
-        h.stun = known ? 0.8 : d.stun;
+        h.stun = known ? 0.8 : hold(h, d, 'stun', it.lv);
         RD.burst(x, y, '#5a4a66', 14, 1.5, f);
         log(R, `${h.name} falls through the false floor at ${where}.`, 'hit');
         break;
@@ -383,7 +398,8 @@
         log(R, `Miasma pours from the grate at ${where}.`, 'hit');
         break;
       case 'maze':
-        h.confuse = d.confuse;
+        hurt(G, R, h, dmg, 'illusion');
+        h.confuse = hold(h, d, 'confuse', it.lv);
         h.next = -1;
         RD.ring(x, y, 0.8, '#b38be0', f);
         log(R, `${h.name} steps on the wandering rune and loses the way.`, 'hit');
@@ -391,7 +407,7 @@
       case 'frost':
         RD.ring(x, y, d.radius, '#9cc0e6', f);
         RD.burst(x, y, '#cfe3f2', 18, 2.5, f);
-        for (const o of heroesNear(R, f, x, y, d.radius)) { hurt(G, R, o, dmg, 'trap'); o.slowT = d.slow; }
+        for (const o of heroesNear(R, f, x, y, d.radius)) { hurt(G, R, o, dmg, 'trap'); o.slowT = hold(o, d, 'slow', it.lv); }
         log(R, `Frost blooms from the sigil at ${where}.`, 'hit');
         break;
       case 'siphon': {
@@ -420,11 +436,13 @@
   const alive = (h) => h.state !== 'dead' && h.state !== 'out';
   RD.heroAlive = alive;
 
-  function hurt(G, R, h, dmg, cat) {
+  function hurt(G, R, h, dmg, cat, aoe) {
     if (!alive(h)) return;
+    if (aoe && RD.CLASSES[h.cls].fireward) dmg *= RD.CLASSES[h.cls].fireward;
     h.hp -= dmg;
+    h.hurtTaken += dmg / h.maxHp;
     h.cat = cat;
-    if (dmg >= 1) RD.floater(h.x, h.y - 0.3, Math.round(dmg).toString(), '#e46a7c', false, fl(h.tile));
+    if (dmg >= 1) { RD.floater(h.x, h.y - 0.3, Math.round(dmg).toString(), '#e46a7c', false, fl(h.tile)); sfx('hit'); }
     if (h.hp <= 0) die(G, R, h);
   }
 
@@ -440,10 +458,11 @@
     }
     h.state = 'dead';
     h.hp = 0;
-    const bounty = Math.round((8 + h.maxHp / 9 + (h.lvl - 1) * 4) * (h.title ? 2 : 1));
+    sfx('death');
+    const bounty = Math.round((10 + 12 * h.tier) * (1 + 0.1 * (h.lvl - 1)) * (h.title ? 2 : 1));
     G.malice += bounty;
     R.malice += bounty;
-    const purse = 1 + 2 * h.tier;
+    const purse = 2 + 3 * h.tier;
     G.gold += purse;
     R.goldBack += purse;
     if (h.carry) {
@@ -468,6 +487,7 @@
 
   function leave(G, R, h) {
     h.state = 'out';
+    sfx('escape');
     R.escaped.push(h);
     G.stats.escaped++;
     report(R, h);
@@ -486,6 +506,8 @@
     const C = RD.CLASSES[h.cls];
     let mult = C.holy && foe.d.undead ? C.holy : 1;
     if (C.slayer && foe.d.boss) mult *= C.slayer;
+    if (C.rage) mult *= 1 + C.rage * (1 - h.hp / h.maxHp);
+    if (R.heroes.some((o) => o !== h && alive(o) && RD.CLASSES[o.cls].inspire && udist(o, h) <= 2.5)) mult *= 1.25;
     const targets = [foe];
     const around = C.cleave ? [h, C.cleave] : C.splash ? [foe, C.splash] : null;
     if (around) for (const m of R.monsters) if (m !== foe && !m.dead && !m.dormant && udist(m, around[0]) <= around[1]) targets.push(m);
@@ -498,6 +520,8 @@
       if (m.hp <= 0 && !m.dead) {
         m.dead = true;
         if (m.summoner) m.summoner.minions--;
+        sfx(m.d.boss ? 'boom' : 'hit');
+        h.xp += (m.d.boss ? 6 : 1) * (1 + Math.max(0, m.tier - h.tier + 1));
         RD.burst(m.x, m.y, '#9a8f9c', m.d.boss ? 40 : 14, m.d.boss ? 4 : 2.5, fl(m.tile));
         log(R, m.d.boss ? `${label(h)} slays the ${m.d.name}!` : `${h.name} destroys the ${m.d.name.toLowerCase()}.`, m.d.boss ? 'warn' : 'hero');
       }
@@ -518,8 +542,17 @@
       const amt = C.heal * scaleOf(h) * dt;
       for (const o of R.heroes) if (alive(o) && o !== h && o.hp < o.maxHp && udist(o, h) <= C.healR) o.hp = Math.min(o.maxHp, o.hp + amt);
     }
+    if (C.cure && (h.cureT -= dt) <= 0) {
+      for (const o of R.heroes) if (alive(o) && o !== h && udist(o, h) <= C.cure && (o.rootT > 0 || o.confuse > 0 || o.slowT > 0)) {
+        o.rootT = o.confuse = o.slowT = 0;
+        h.cureT = 3;
+        RD.floater(o.x, o.y - 0.4, 'cured', '#86c06a', false, fl(o.tile));
+        break;
+      }
+    }
 
-    if ((h.state === 'seek' || h.state === 'loot') && h.hp < h.fleeAt * h.maxHp) {
+    const steady = R.heroes.some((o) => o !== h && alive(o) && RD.CLASSES[o.cls].inspire && udist(o, h) <= 2.5) ? 0.6 : 1;
+    if ((h.state === 'seek' || h.state === 'loot') && h.hp < h.fleeAt * steady * h.maxHp) {
       h.state = 'flee';
       h.next = -1;
       h.doorAt = h.disarmAt = -1;
@@ -529,12 +562,14 @@
     if (h.state === 'loot') {
       h.lootT -= dt;
       if (h.lootT <= 0) {
-        const want = Math.round((5 + h.greed * 6 + G.raid * 0.6) * (1 + 0.25 * h.tier));
+        const want = Math.round((5 + h.greed * 6 + 0.4 * Math.min(G.raid, 40)) * (1 + 0.15 * h.tier) * RD.BAL.theft);
         const take = Math.min(G.gold, want);
         G.gold -= take;
         h.carry += take;
         R.goldTaken += take;
         h.state = 'escape';
+        h.xp += 4;
+        sfx('loot');
         RD.floater(h.x, h.y - 0.5, '−' + take + ' gold', '#e3b04b', true, fl(h.tile));
         log(R, `${h.name} fills a sack with ${take} gold.`, 'warn');
       }
@@ -568,6 +603,8 @@
         it.broken = true;
         const [x, y] = center(it.tile);
         RD.burst(x, y, '#8a8090', 12, 2, fl(it.tile));
+        h.xp += 1;
+        sfx('door');
         log(R, `${h.name} ${picks ? 'picks the lock on' : 'batters down'} the ${RD.ITEMS[it.type].name.toLowerCase()} at ${RD.coord(it.tile)}.`, 'hero');
         h.doorAt = -1;
       }
@@ -586,6 +623,7 @@
           const kt = h.K.traps.get(j);
           if (kt) kt.off = true;
           RD.floater(x, y, 'disarmed', '#9cc0e6', false, fl(j));
+          h.xp += 1;
           log(R, `${h.name} disarms the ${RD.ITEMS[it.type].name.toLowerCase()} at ${RD.coord(j)}.`, 'hero');
         } else {
           const kt = h.K.traps.get(j);
@@ -609,7 +647,7 @@
       return;
     }
     const [gx, gy] = center(h.next);
-    const sp = h.speed * (h.slowT > 0 ? 0.5 : 1) * (R.douseT > 0 ? 0.75 : 1) * (1 - (G.guild.wariness || 0) * 0.15) * (h.confuse > 0 ? 0.7 : 1);
+    const sp = h.speed * (steady < 1 ? 1.1 : 1) * (h.slowT > 0 ? 0.5 : 1) * (R.douseT > 0 ? 0.75 : 1) * (1 - (G.guild.wariness || 0) * 0.15) * (h.confuse > 0 ? 0.7 : 1);
     const dx = gx - h.x, dy = gy - h.y, d = Math.hypot(dx, dy);
     if (d <= sp * dt) {
       h.x = gx; h.y = gy;
@@ -632,6 +670,7 @@
     s.home = m.home;
     m.minions++;
     R.monsters.push(s);
+    sfx('summon');
     RD.burst(s.x, s.y, '#b38be0', 12, 2, fl(at));
     log(R, `The ${m.d.name.toLowerCase()} calls a ${RD.ITEMS[type].name.toLowerCase()}.`, 'hit');
   }
@@ -673,11 +712,12 @@
         const r = d.breath ? d.breathR : d.quakeR;
         if (m.abT <= 0 && best <= r) {
           m.abT = d.every;
-          const dmg = RD.TIER_MULT[m.tier] * RD.levelMult(m.lv) * (d.breath || d.quake) * (omen(G, 'moon') ? 1.3 : 1);
+          const dmg = RD.scaled(m.type, d.breath ? 'breath' : 'quake', m.lv, m.tier) * (omen(G, 'moon') ? 1.3 : 1);
           RD.ring(m.x, m.y, r, d.breath ? '#ff8a3d' : '#c9a36a', f);
           RD.burst(m.x, m.y, d.breath ? '#ff8a3d' : '#8a8090', 30, 4, f);
           FX.shake = Math.max(FX.shake, 0.7);
-          for (const h of heroesNear(R, f, m.x, m.y, r)) { hurt(G, R, h, dmg, 'monster'); if (d.quake && alive(h)) h.stun = 1.5; }
+          sfx(d.breath ? 'fire' : 'boom');
+          for (const h of heroesNear(R, f, m.x, m.y, r)) { hurt(G, R, h, dmg, 'monster', true); if (d.quake && alive(h)) h.stun = 1.5 * resist(h, d); }
           log(R, `The ${d.name.toLowerCase()} ${d.lord ? 'calls down hellfire' : d.breath ? 'breathes fire' : 'shatters the floor'}.`, 'hit');
         }
       }
@@ -792,7 +832,7 @@
 
     const active = R.heroes.filter(alive);
     if (!R.queue.length && !active.length) return endRaid(G, R);
-    if (R.t > RD.RAID_TIME_LIMIT) {
+    if (R.t > RD.raidTime(G)) {
       for (const h of active) leave(G, R, h);
       log(R, 'The torches gutter out. The last heroes feel their way back to the gate.', 'info');
       return endRaid(G, R);
@@ -808,6 +848,7 @@
     if (G.malice < p.cost) return `${p.name} needs ${p.cost} malice.`;
     G.malice -= p.cost;
     R.powers[power] = p.cd;
+    sfx('power');
     if (power === 'tremor') {
       const [x, y] = center(tile);
       const f = fl(tile);
@@ -855,11 +896,11 @@
     return out;
   };
 
-  const brief = (h) => ({ name: h.name, title: h.title, cls: h.cls, tier: h.tier, carry: h.carry || 0 });
+  const brief = (h) => ({ name: h.name, title: h.title, cls: h.cls, tier: h.tier, carry: h.carry || 0, growth: h.growth || '' });
 
   function endRaid(G, R) {
     G.phase = 'debrief';
-    const gu = G.guild;
+    const gu = G.guild, D = RD.DIFF[G.diff];
     const before = gu.K;
     let intel = [];
     if (R.report) {
@@ -889,10 +930,27 @@
       rumors.push({ who: `${s.name}, ${RD.TIERS[s.tier]}-rank ${RD.CLASSES[s.cls].name}`, text: fill(G.rng.pick(tpls), { c: it.tile != null ? RD.coord(it.tile) : '', w: it.what || '', n: it.n }) });
     }
     gu.rumors = rumors.concat(gu.rumors).slice(0, 14);
-    for (const h of R.escaped) gu.veterans.push({ name: h.name, cls: h.cls, tier: h.tier, lvl: h.lvl, traits: h.traits });
+    // Escaping is not enough. Heroes who fought, looted, mapped or bled come back stronger;
+    // ones who ran with nothing to show for it come back the same, or quit.
+    const cap = Math.min(8, RD.unlocked(G));
+    for (const h of R.escaped) {
+      const xp = h.xp + Math.min(2, h.charted * 0.04) + Math.min(2, h.hurtTaken * 1.5);
+      let lvl = h.lvl, tier = h.tier;
+      if (xp >= 14 && tier < cap) { tier++; h.growth = `ranked up to ${RD.TIERS[tier]}`; }
+      else if (xp >= 6) { lvl++; h.growth = 'returns stronger'; }
+      else if (xp < 1.5 && G.rng.chance(0.5)) { h.growth = 'quit the guild'; continue; }
+      else h.growth = 'learned little';
+      gu.veterans.push({ name: h.name, cls: h.cls, tier, lvl, traits: h.traits });
+    }
     gu.veterans = gu.veterans.slice(-6);
-    const D = RD.DIFF[G.diff];
-    const income = Math.round((26 + 4 * G.raid) * D.income * (1 + 0.3 * RD.unlocked(G)));
+    gu.blackout = (R.reporters || []).length ? 0 : gu.blackout + 1;
+    // Renown: once the ranks run out, every night the guild fails to take gold it trains and equips harder.
+    // A dungeon that holds easily keeps facing stronger heroes until something gives.
+    if (G.raid >= 15) {
+      if (R.goldTaken - R.goldBack <= 0) gu.renown = (gu.renown || 0) + 0.05 * D.drift;
+      else gu.renown = Math.max(0, (gu.renown || 0) - 0.02);
+    }
+    const income = Math.round((26 + 4 * Math.min(G.raid, 40)) * D.income * (1 + 0.25 * RD.unlocked(G)));
     G.malice += income;
     const lost = R.goldTaken - R.goldBack;
     G.stats.goldLost += Math.max(0, lost);

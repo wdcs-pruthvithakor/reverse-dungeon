@@ -6,11 +6,13 @@ A strategy game where you play the dungeon, not the hero. Place traps, monsters 
 python3 -m http.server 8000   # then visit http://localhost:8000
 ```
 
-There is no build step. Fonts load from Google Fonts. Everything else (canvas rendering, AI and simulation) is hand-written vanilla JS.
+There is no build step and no outside requests: the fonts ship in `fonts/` (SIL Open Font License) and sound effects are synthesised with Web Audio. Everything else (canvas rendering, AI and simulation) is hand-written vanilla JS. The whole game is about 260 KB.
+
+New players get a one-click start on Apprentice and a guided first night (place a trap, place a monster, open the gate). The game fills one fixed screen at any landscape size; below 1150 px wide the Guild Ledger becomes a drawer, and portrait phones are asked to turn sideways.
 
 ## How a night works
 
-1. **Build.** Spend malice on traps, wall pieces, doors, monsters and bosses. Moving a piece is free, even between floors. Dig or fill corridors, or haul the hoard somewhere new. **Level up** a placed piece (Lv1–5, +15% per level). Hover any piece to see its numbers, and with the Level tool, the before and after.
+1. **Build.** Everything you have unlocked is always in the catalogue, and three random pieces are 30% off each night. Moving a piece is free, even between floors. Dig or fill corridors, or haul the hoard somewhere new. **Level up** a placed piece (Lv1–5): each level adds 15% to damage and health, 15% to how long it pins, dazes, slows or stuns, and makes traps rearm 6% faster. Hover any piece to see its numbers, and with the Level tool, the before and after.
 2. **Raid.** Heroes enter carrying the guild's map. They path around traps they know about, take the stairs down when they find them, rogues disarm, mages see through illusions, and greedy heroes detour for chests (mimics). The camera follows them between floors.
 3. **Reckoning.** Survivors and any hero carrying a *Sending Stone* report to the guild. Their intel shows up as tavern talk with coordinates (`II·F7` is floor II, column F, row 7). Heroes who die take what they learned with them. The last five raids, full logs included, are kept under **Raid reports**.
 
@@ -22,7 +24,12 @@ Hold the hoard for the nights your difficulty asks (20–30) to win. You can kee
 - You start with F-rank blueprints. Higher ranks unlock as you survive (E on night 3, D on 5, C on 8, up to SSS on 23 and the Demon Lord on 26). New floors can be dug on nights 4, 9, 14 and 19. The hoard is carried down to each new floor.
 - **Elite monsters** outfight a whole party of their own rank. **Bosses** (one per floor) summon, breathe fire or shake the ground. **Myth bosses** (Hydra, Behemoth) and the **Demon Lord** come late.
 - The guild **rates your dungeon from what survivors saw**. Let someone escape after seeing your S-rank wyvern and S-rank parties come next. A strong piece nobody lives to report stays a secret. Heavy losses also push the rating up, and quiet nights let it drift down.
-- Adventurers have ranks too, and sometimes a rare **legend** joins: Paladin, Sword Saint, Shadow, Archmage, Saint, or the Chosen Hero, who always answers a known Demon Lord.
+- Adventurers have ranks too. Classes open up with rank: Knight, Rogue, Mage, Cleric and Scout from the start, then Ranger (E), Berserker (D), Alchemist (C) and Bard (B). The guild builds parties by role: a tank, a healer once parties get big, a trap-finder when it knows about your traps, and someone who sees through illusions.
+- Rare **legends** sometimes join: Paladin, Sword Saint, Shadow, Archmage, Saint, Dragonslayer, or the Chosen Hero.
+- When the guild knows about one of your bosses, it often sends a **strike team** of higher-rank specialists who hunt the boss before going for the hoard. A known Demon Lord always brings the Chosen Hero.
+- **Escaping is not enough to grow.** Heroes earn experience by killing monsters, looting, mapping, disarming and surviving damage. Only those who earned it come back stronger or a rank higher. Ones who ran with nothing may quit the guild.
+- A high-rank hero partly shrugs off pins, dazes, slows and stuns from traps far below its rank.
+- **The guild keeps up.** Adventurers in general track the ranks you have unlocked, even if nobody escapes. A party that vanishes makes the next one bigger and better supplied with Sending Stones. From night 15, every night the guild fails to take gold adds **renown** (shown as a `+` on the rating), making later heroes stronger. Easy nights do not last.
 
 ## Difficulty
 
@@ -31,7 +38,9 @@ Hold the hoard for the nights your difficulty asks (20–30) to win. You can kee
 | Apprentice | More gold and malice, weaker heroes, slower guild. Hold 20 nights. |
 | Keeper | The game as designed. Hold 25 nights. |
 | Overlord | Tougher heroes, leaner income, the guild climbs faster. Hold 25 nights. |
-| Abyss | Bigger parties, legends often, little gold. Hold 30 nights. |
+| Abyss | Bigger parties, legends often, the guild grows fastest. Hold 30 nights. |
+
+Balance was tuned with headless bot games. A bot that builds kill zones, re-traps known spots and keeps everything levelled reaches the win on Keeper about half the time and on Overlord about one time in five. It always holds on Apprentice and rarely survives Abyss. In endless mode every run eventually falls; on Keeper that bot lasts to nights 25–50. The dials live in `RD.BAL` and `RD.DIFF` in `js/data.js`.
 
 ## What keeps it unpredictable
 
@@ -47,7 +56,8 @@ Hold the hoard for the nights your difficulty asks (20–30) to win. You can kee
 | Key / input | Action |
 |---|---|
 | Click map | Use the selected blueprint or tool |
-| Right-click / `Esc` | Cancel a move or a power |
+| Tap map (touch) | First tap shows what would happen; tap the same tile again to do it |
+| Right-click / `Esc` / **Cancel** | Cancel a move or a power |
 | `Space` | Open the gate (build), pause/resume (raid) |
 | `G` | Toggle the guild's map |
 | `[` `]` | Previous / next floor |
@@ -55,9 +65,26 @@ Hold the hoard for the nights your difficulty asks (20–30) to win. You can kee
 
 During a raid, **Tremor** knocks down heroes around a tile, and **Douse** snuffs every torch so heroes can't spot traps.
 
+## Web portals
+
+`js/portal.js` adapts the game to CrazyGames SDK v3. The SDK is only loaded when the game runs on a CrazyGames domain (or locally with `?portal=crazygames`, which uses the SDK's local test mode); everywhere else the adapter does nothing and no ads exist.
+
+| Moment | What the game does |
+|---|---|
+| Loaded and fonts ready | `loadingStop` |
+| Leaving a menu or report into the dungeon / opening one | `gameplayStart` / `gameplayStop` |
+| "Prepare the next night", from night 3 on | a midgame ad break (the SDK decides whether one plays) |
+| Ad starts / ends | the raid freezes, sound mutes, gameplay stops / everything resumes |
+| 🎬 Reroll free | optional rewarded ad, once a night; deals can always be rerolled for malice |
+| 🎬 Second chance | optional rewarded ad once per dungeon after the hoard is emptied, beside an equal-sized "Accept defeat" |
+| Perfect night, legend slain, new floor, victory | `happytime` |
+| Saves | the SDK data module (synced to the player's account), else `localStorage` |
+
+To submit, upload `index.html`, `css/`, `js/` and `fonts/`. When submitting on CrazyGames, enable "Progress Save → Data Module".
+
 ## Saving
 
-The game saves itself in `localStorage` at the start of every night and after every build action. When you reopen the page you can **Resume** or start a new dungeon. A refresh during a raid replays that night from where you left your build. A refresh during the dawn report continues with the next night. Saves from before ranks and floors existed are migrated: pieces keep their upgrades as levels, and tonight's party is hired again with ranks.
+The game saves itself (in the portal's data module when there is one, else `localStorage`) at the start of every night and after every build action. When you reopen the page you can **Resume** or start a new dungeon. A refresh during a raid replays that night from where you left your build. A refresh during the dawn report continues with the next night. Saves from before ranks and floors existed are migrated: pieces keep their upgrades as levels, and tonight's party is hired again with ranks.
 
 ## Files
 
@@ -69,4 +96,7 @@ The game saves itself in `localStorage` at the start of every night and after ev
 | `js/world.js` | Grid and floors, map generation, building rules, guild knowledge and rating, party generation, save/load |
 | `js/sim.js` | Raid simulation: hero AI, stairs, detection, traps, monsters, boss abilities, reports, raid history |
 | `js/render.js` | Canvas drawing per floor, torchlight, guild's-map overlay, glyphs and rank badges |
-| `js/ui.js` | DOM panels, floor tabs, stat panel, modals, input and the frame loop |
+| `js/audio.js` | Synthesised sound effects and the mute switch |
+| `js/portal.js` | Web portal adapter (CrazyGames SDK v3): gameplay events, ads, cloud saves |
+| `js/ui.js` | DOM panels, floor tabs, stat panel, tutorial, modals, input, portal hooks and the frame loop |
+| `fonts/` | Bundled Jacquard 24, Alegreya Sans and DM Mono (latin subset) with their licenses |

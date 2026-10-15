@@ -1,5 +1,5 @@
 'use strict';
-// DOM wiring: blueprints, floors, the ledger, modals, input, and the frame loop.
+// DOM wiring: blueprints, floors, the ledger, modals, input, the tutorial, portal hooks and the frame loop.
 (function () {
   const RD = window.RD;
   const $ = (id) => document.getElementById(id);
@@ -12,16 +12,29 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const tierTag = (t) => `<span class="tier" style="--tc:${RD.TIER_COLOR[t]}">${RD.TIERS[t]}</span>`;
 
-  const ui = (RD.ui = { tool: 'spikes', carry: null, power: null, speed: 1, previewError: null, follow: true, diff: 'normal', hoverIt: null });
+  const ui = (RD.ui = {
+    tool: 'spikes', carry: null, power: null, speed: 1, previewError: null, follow: true, diff: 'easy', hoverIt: null, groups: {},
+    touch: false, armed: -1, adPause: false, canSave: true, tut: 0,
+  });
   let G = null;
+  const P = RD.portal;
+  const sfx = (n) => RD.sfx(n);
 
   // ---------------------------------------------------------------- storage (best effort)
+  // The portal's data module when there is one (it syncs to the player's account), else localStorage.
   const store = {
-    del(k) { try { localStorage.removeItem('rd.' + k); } catch (e) { /* private mode */ } },
-    get(k, d) { try { const v = localStorage.getItem('rd.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
-    set(k, v) { try { localStorage.setItem('rd.' + k, JSON.stringify(v)); } catch (e) { /* private mode or full */ } },
+    del(k) { try { P.storage().removeItem('rd.' + k); } catch (e) { /* storage blocked */ } },
+    get(k, d) { try { const v = P.storage().getItem('rd.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { P.storage().setItem('rd.' + k, JSON.stringify(v)); } catch (e) { ui.canSave = false; } },
   };
-  ui.diff = store.get('diff', 'normal');
+  function probeStorage() {
+    try {
+      const s = P.storage();
+      s.setItem('rd.probe', '1');
+      ui.canSave = s.getItem('rd.probe') === '1';
+      s.removeItem('rd.probe');
+    } catch (e) { ui.canSave = false; }
+  }
 
   // ---------------------------------------------------------------- toast
   let toastT = 0;
@@ -29,6 +42,7 @@
     const t = $('toast');
     t.textContent = msg;
     t.className = 'toast show' + (good ? ' good' : '');
+    if (!good) sfx('error');
     clearTimeout(toastT);
     toastT = setTimeout(() => (t.className = 'toast'), good ? 3200 : 1800);
   }
@@ -72,15 +86,55 @@
       tools.append(b);
     }
     const top = RD.unlocked(G);
-    $('basic').replaceChildren(...RD.BASIC.map((t) => card(t)));
-    $('offers').replaceChildren(...(G.offers.length ? G.offers.map((t) => card(t, G.sale === t)) : [el('p', 'empty', 'Nothing yet. Higher-rank blueprints start turning up on night ' + RD.TIER_UNLOCK[1] + '.')]));
-    const bosses = RD.BOSSES.filter((b) => RD.ITEMS[b].tier <= top).map((b) => card(b));
-    const nextBoss = RD.BOSSES.find((b) => RD.ITEMS[b].tier > top);
-    if (nextBoss) bosses.push(card(nextBoss, false, true));
-    $('bosses').replaceChildren(...bosses);
+    $('offers').replaceChildren(...G.offers.map((t) => card(t, true)), dealsBar());
+    // the whole catalogue, newest ranks first; the next locked piece in each group shows when it opens
+    const box = $('catalog');
+    box.innerHTML = '';
+    for (const g of RD.GROUPS) {
+      const all = Object.keys(RD.ITEMS).filter((k) => RD.inGroup(g, k)).sort((a, b) => RD.ITEMS[b].tier - RD.ITEMS[a].tier || RD.ITEMS[a].cost - RD.ITEMS[b].cost);
+      const open = all.filter((k) => RD.ITEMS[k].tier <= top);
+      const next = all.filter((k) => RD.ITEMS[k].tier > top).sort((a, b) => RD.ITEMS[a].tier - RD.ITEMS[b].tier)[0];
+      const det = el('details', 'group');
+      det.open = ui.groups[g.id] !== false;
+      det.ontoggle = () => { ui.groups[g.id] = det.open; };
+      det.append(el('summary', null, `${esc(g.name)} <small>${open.length}</small>`));
+      const cards = el('div', 'cards');
+      cards.append(...open.map((t) => card(t, G.offers.includes(t))));
+      if (next) cards.append(card(next, false, true));
+      if (!open.length && !next) continue;
+      det.append(cards);
+      box.append(det);
+    }
     const nu = RD.nextUnlock(G);
     $('unlock').innerHTML = nu ? `Next: ${tierTag(nu.tier)} blueprints on night ${nu.night}: ${nu.items.map((k) => esc(RD.ITEMS[k].name)).join(', ')}.` : 'Every rank is open to you.';
     renderDetail();
+  }
+
+  // New deals for malice, or once a night after an optional ad where the portal has ads.
+  function dealsBar() {
+    const bar = el('div', 'reroll');
+    const paid = el('button', 'ghost small', `Reroll deals · <span class="m">${RD.REROLL_COST}</span>`);
+    paid.type = 'button';
+    paid.onclick = () => {
+      if (G.malice < RD.REROLL_COST) return toast(`Needs ${RD.REROLL_COST} malice.`);
+      G.malice -= RD.REROLL_COST;
+      RD.rerollDeals(G);
+      sfx('sell');
+      afterBuild();
+    };
+    bar.append(paid);
+    if (P.ads && G.adReroll !== G.raid) {
+      const free = el('button', 'ghost small rewarded', '🎬 Reroll free');
+      free.type = 'button';
+      free.onclick = () => P.rewarded((ok) => {
+        if (!ok) return;
+        G.adReroll = G.raid;
+        RD.rerollDeals(G);
+        afterBuild();
+      });
+      bar.append(free);
+    }
+    return bar;
   }
 
   function statTable(type, lv, next) {
@@ -94,6 +148,7 @@
 
   // The detail panel describes whatever you are pointing at: a placed piece, else the selected blueprint or tool.
   function renderDetail() {
+    $('cancel').hidden = ui.carry == null;
     const box = $('detail');
     const it = ui.hoverIt && G.items.get(ui.hoverIt.tile) === ui.hoverIt ? ui.hoverIt : null;
     if (it && G.phase === 'build') {
@@ -114,7 +169,7 @@
     }
     const d = RD.TOOLS[ui.tool];
     let extra = '';
-    if (ui.tool === 'move' && ui.carry != null) extra = `<br><em>Carrying the ${esc(RD.ITEMS[G.items.get(ui.carry).type].name.toLowerCase())} from ${RD.coord(ui.carry)}. Click a tile to set it down (switch floors to carry it deeper), or Esc to cancel.</em>`;
+    if (ui.tool === 'move' && ui.carry != null) extra = `<br><em>Carrying the ${esc(RD.ITEMS[G.items.get(ui.carry).type].name.toLowerCase())} from ${RD.coord(ui.carry)}. Pick a tile to set it down (switch floors to carry it deeper), or Cancel.</em>`;
     const cost = RD.costOf(G, ui.tool);
     box.innerHTML = `<b>${esc(d.name)}${cost ? ` · <span class="m">${cost}</span>` : ''}</b>${esc(d.desc)}${extra}`;
   }
@@ -156,6 +211,8 @@
         if (res.err) return toast(res.err);
         setFloor(res.floor);
         RD.view.dirty = true;
+        sfx('dig');
+        P.happytime();
         save();
         renderAll();
         toast(`Floor ${RD.ROMAN[res.floor]} is dug. Stairs at ${RD.coord(res.stairs)}, and your hoard was carried down to ${RD.coord(G.hoard)}.`, true);
@@ -171,7 +228,7 @@
     RD.heroIcon(cv, h, 28);
     const C = RD.CLASSES[h.cls];
     const chips = (h.traits || []).map((t) => `<span class="chip${t === 'stone' ? ' stone' : ''}" title="${esc(RD.TRAITS[t].desc)}">${esc(RD.TRAITS[t].name)}</span>`).join('');
-    const vet = h.lvl > 1 ? `<span class="chip vet" title="Survived an earlier raid and came back stronger">Returns ×${h.lvl - 1}</span>` : '';
+    const vet = h.lvl > 1 ? `<span class="chip vet" title="Earned it in an earlier raid: fought, looted or mapped, and came back stronger">Veteran ×${h.lvl - 1}</span>` : '';
     let state = '';
     if (live) {
       const st = { seek: h.K && h.K.hoard >= 0 ? 'heading for the hoard' : 'exploring', loot: 'looting', escape: 'leaving with gold', flee: 'running', dead: 'dead', out: h.carry ? `escaped with ${h.carry} gold` : 'escaped' };
@@ -181,7 +238,9 @@
     }
     const hp = live ? Math.max(0, Math.ceil(h.hp)) : h.maxHp;
     li.title = `${C.desc}\nHealth ${h.maxHp} · Damage ${Math.round(h.dmg)} every ${h.rate}s`;
-    li.innerHTML = `<span></span><div class="who"><b>${tierTag(h.tier)} ${esc(h.name)}</b><small>${h.title ? `<em>${esc(h.title)}</em> · ` : ''}${C.name}${live ? ' · ' : ''}</small>${state}<div class="chips">${vet}${chips}</div>${live ? `<div class="bar"><i style="width:${(100 * hp) / h.maxHp}%"></i></div>` : ''}</div><span class="hp">${hp}<br><small>hp</small></span>`;
+    const prey = h.hunt != null && G.items.get(h.hunt);
+    const hunt = h.hunt != null ? `<span class="chip hunt" title="Part of a strike team. Goes for this boss before the hoard.">Hunting ${prey ? esc(RD.ITEMS[prey.type].name) : 'a boss'}</span>` : '';
+    li.innerHTML = `<span></span><div class="who"><b>${tierTag(h.tier)} ${esc(h.name)}</b><small>${h.title ? `<em>${esc(h.title)}</em> · ` : ''}${C.name}${live ? ' · ' : ''}</small>${state}<div class="chips">${hunt}${vet}${chips}</div>${live ? `<div class="bar"><i style="width:${(100 * hp) / h.maxHp}%"></i></div>` : ''}</div><span class="hp">${hp}<br><small>hp</small></span>`;
     li.firstChild.replaceWith(cv);
     return li;
   }
@@ -226,7 +285,8 @@
     setStat('st-gold', String(G.gold));
     setStat('st-malice', String(G.malice));
     const t = Math.round(G.guild.threat);
-    setStat('st-rating', RD.TIERS[t], RD.TIER_COLOR[t]);
+    setStat('st-rating', RD.TIERS[t] + (G.guild.renown > 0.005 ? '+' : ''), RD.TIER_COLOR[t]);
+    $('st-rating').parentNode.title = `What the guild thinks your dungeon is worth.${G.guild.renown > 0.005 ? ` Renown +${Math.round(G.guild.renown * 100)}%: every night they fail to take gold, they train harder.` : ''}`;
     setStat('st-known', Math.round(RD.coverage(G, G.guild.K) * 100) + '%');
   }
 
@@ -302,7 +362,8 @@
     const it = G.items.get(i);
     let what = it ? ` · ${RD.TIERS[RD.ITEMS[it.type].tier]}-rank ${RD.ITEMS[it.type].name} Lv${it.lv || 1}` : i === G.hoard ? ' · the hoard' : RD.isGate(G, i) ? (i === G.entrance ? ' · the gate' : ' · stairs up') : RD.isStairs(G, i) ? ' · stairs down' : '';
     if (it && ui.tool === 'upgrade' && !ui.previewError) what += ` · Lv${(it.lv || 1) + 1} for ${RD.levelCost(it)} malice`;
-    $('hint').innerHTML = `<b>${RD.coord(i)}</b>${esc(what)}${ui.previewError ? ' · ' + esc(ui.previewError) : ''}`;
+    const confirm = ui.touch && ui.armed === i && !ui.previewError ? ' · tap again to confirm' : '';
+    $('hint').innerHTML = `<b>${RD.coord(i)}</b>${esc(what)}${ui.previewError ? ' · ' + esc(ui.previewError) : ''}${confirm}`;
   }
 
   function click(i) {
@@ -328,6 +389,7 @@
       const res = RD.apply(G, 'move', i, ui.carry);
       if (res.err) return toast(res.err);
       ui.carry = null;
+      sfx('place');
       renderDetail();
       afterBuild();
       return;
@@ -335,6 +397,8 @@
     const res = RD.apply(G, ui.tool, i);
     if (res.err) return toast(res.err);
     if (res.map) RD.view.dirty = true;
+    sfx(res.map ? 'dig' : res.lv ? 'level' : res.gained ? 'sell' : 'place');
+    if (RD.ITEMS[ui.tool]) tutorial('placed', RD.ITEMS[ui.tool]);
     const [x, y] = RD.xy(i);
     if (res.spent) RD.floater(x + 0.5, y + 0.3, '−' + res.spent, RD.PAL.maliceHi);
     if (res.gained) RD.floater(x + 0.5, y + 0.3, '+' + res.gained, RD.PAL.maliceHi);
@@ -362,6 +426,8 @@
     ui.follow = true;
     RD.startRaid(G);
     setFloor(0);
+    sfx('gate');
+    tutorial('raid');
     renderAll();
   }
 
@@ -373,11 +439,11 @@
     setFloor(Math.max(...live.map((h) => RD.fl(h.tile))));
   }
 
+  const canRevive = () => P.ads && G.result === 'lost' && !G.stats.revived;
   RD.onRaidEnd = function () {
     renderAll();
-    saveRecord();
-    if (G.phase === 'over') store.del('save');
-    else store.set('save', RD.saveGame(G, true));
+    if (G.phase === 'over' && !canRevive()) { saveRecord(); store.del('save'); }
+    else if (G.phase !== 'over') store.set('save', RD.saveGame(G, true));
     setTimeout(() => showDebrief(), 700);
   };
 
@@ -395,17 +461,20 @@
     const legend = G.party.find((h) => h.title);
     if (legend) msgs.push(`a legend is coming: ${legend.name} ${legend.title}`);
     toast(`Night ${G.raid}. ${G.party.length} heroes are coming${msgs.length ? '. ' + msgs.join(', ') : ''}.`, true);
+    P.context({ night: G.raid, difficulty: G.diff });
   }
 
   // ---------------------------------------------------------------- modals
   function openModal(html, onReady) {
+    P.gameplayStop();
     $('sheet').innerHTML = html;
     $('modal').hidden = false;
+    $('modal').scrollTop = 0;
     if (onReady) onReady($('sheet'));
     const f = $('sheet').querySelector('[data-focus]');
     if (f) f.focus();
   }
-  function closeModal() { $('modal').hidden = true; }
+  function closeModal() { $('modal').hidden = true; if (G) P.gameplayStart(); }
   const isOpen = () => !$('modal').hidden;
 
   function showIntro() {
@@ -415,44 +484,36 @@
     const diffs = Object.entries(RD.DIFF).map(([k, d]) => `<label class="diff${ui.diff === k ? ' on' : ''}"><input type="radio" name="diff" value="${k}"${ui.diff === k ? ' checked' : ''}><b>${esc(d.name)}</b><span>${esc(d.blurb)} Hold ${d.win} nights.</span></label>`).join('');
     openModal(`
       ${live ? `<div class="resume">
-        <div><b>Your dungeon awaits</b><span>${esc(RD.DIFF[live.diff].name)} · night ${live.raid}${live.endless ? ' (endless)' : ` of ${RD.winAt(live)}`} · ${live.floors} floor${live.floors > 1 ? 's' : ''} · ${live.gold} gold · ${live.malice} malice · rated ${RD.rating(live.guild.threat)}</span></div>
+        <div><b>Your dungeon awaits</b><span>${esc(RD.DIFF[live.diff].name)} · night ${live.raid}${live.endless ? ' (endless)' : ` of ${RD.winAt(live)}`} · ${live.floors} floor${live.floors > 1 ? 's' : ''} · ${live.gold} gold · rated ${RD.rating(live.guild.threat)}</span></div>
         <button type="button" class="go" id="resume" data-focus>Resume</button>
       </div>` : ''}
-      <p class="eyebrow">Strategy · Dungeon builder</p>
       <h2 id="sheet-title">The Reverse Dungeon</h2>
-      <p class="lede">You play the dungeon, not the hero. Adventurers come for your gold every night. The ones who get out alive tell the guild what they saw, and the next party walks in knowing it.</p>
-      <div class="cols">
-        <div>
-          <h3>Between raids</h3>
-          <ul class="rules">
-            <li><span>Build traps, monsters and bosses. Everything has a rank from F to SSS. Higher ranks and deeper floors unlock as you survive.</span></li>
-            <li><span>The guild rates your dungeon by what survivors saw. Show them an S-rank monster and S-rank heroes come for it.</span></li>
-          </ul>
+      <p class="lede">You are the dungeon. Build traps and monsters, then watch heroes try to steal your gold. Survivors tell the guild what they saw, so kill them before they get out.</p>
+      <form id="seedform">
+        <div class="playrow">
+          <button type="submit" class="${live ? 'ghost' : 'go big'}" ${live ? '' : 'data-focus'}>${live ? 'New dungeon' : 'Play'}</button>
+          <span class="note">${esc(RD.DIFF[ui.diff].name)} · hold ${RD.DIFF[ui.diff].win} nights${live ? ' · replaces your saved dungeon' : ''}</span>
         </div>
-        <div>
-          <h3>During a raid</h3>
-          <ul class="rules">
-            <li><span>Heroes who escape share their map. Kill them before they reach the gate and your secrets stay secret.</span></li>
-            <li><span>Rare legends join some parties. Raise a Demon Lord and the guild sends its Chosen Hero.</span></li>
-          </ul>
-        </div>
-      </div>
-      <h3>Difficulty</h3>
-      <div class="diffs" role="radiogroup">${diffs}</div>
-      ${best ? `<p class="record">Your best: held ${best.held} raid${best.held === 1 ? '' : 's'}, ${best.slain} heroes slain.</p>` : ''}
-      <form class="seedrow" id="seedform">
-        <label for="seed">Seed</label>
-        <input id="seed" name="seed" inputmode="numeric" value="${seed}" autocomplete="off">
-        <button type="button" class="ghost" id="reroll">New seed</button>
-        <button type="submit" class="${live ? 'ghost' : 'go'}" ${live ? '' : 'data-focus'}>${live ? 'Start a new dungeon' : 'Wake the dungeon'}</button>
+        <details class="more">
+          <summary>Difficulty and seed</summary>
+          <div class="diffs" role="radiogroup">${diffs}</div>
+          <div class="seedrow">
+            <label for="seed">Seed</label>
+            <input id="seed" name="seed" inputmode="numeric" value="${seed}" autocomplete="off">
+            <button type="button" class="ghost" id="reroll">New seed</button>
+          </div>
+        </details>
       </form>
-      ${live ? '<p class="note">Starting a new dungeon replaces your saved one. Difficulty applies to new dungeons.</p>' : ''}`, (s) => {
+      ${best ? `<p class="record">Your best: held ${best.held} night${best.held === 1 ? '' : 's'}, ${best.slain} heroes slain.</p>` : ''}
+      ${ui.canSave ? '' : '<p class="note warn">This browser window is blocking storage, so progress will not be saved.</p>'}`, (s) => {
       const r = s.querySelector('#resume');
       if (r) r.onclick = () => closeModal();
+      const note = s.querySelector('.playrow .note');
       for (const inp of s.querySelectorAll('input[name=diff]')) inp.onchange = () => {
         ui.diff = inp.value;
         store.set('diff', ui.diff);
         for (const l of s.querySelectorAll('.diff')) l.classList.toggle('on', l.querySelector('input').checked);
+        note.textContent = `${RD.DIFF[ui.diff].name} · hold ${RD.DIFF[ui.diff].win} nights${live ? ' · replaces your saved dungeon' : ''}`;
       };
       s.querySelector('#reroll').onclick = () => { s.querySelector('#seed').value = (Math.random() * 1e6) | 0; };
       s.querySelector('#seedform').onsubmit = (e) => {
@@ -461,7 +522,8 @@
         newGame(Number.isFinite(v) ? v : (Math.random() * 1e6) | 0, null, ui.diff);
         save();
         closeModal();
-        announce();
+        if (store.get('tut', null) !== 'done') tutorial('start');
+        else announce();
       };
     });
   }
@@ -480,6 +542,14 @@
     else lede = `${d.escaped.length} got out and reported to the guild. Expect them to plan around what they saw.`;
     if (over && G.result === 'lost') { eyebrow = 'The dungeon falls'; title = 'The hoard is empty'; lede = `The guild carried off the last of your gold on raid ${d.raid}. You slew ${G.stats.slain} heroes${G.stats.legends ? `, ${G.stats.legends} of them legends,` : ''} before the end.`; }
     if (over && G.result === 'won') { eyebrow = 'The guild gives up'; title = 'The dungeon endures'; lede = `You held your hoard through ${RD.winAt(G)} raids with ${G.gold} gold left and ${G.stats.slain} heroes slain. The guild has struck your dungeon from its maps.`; }
+    const perfect = !over && d.killed.length >= 2 && !d.escaped.length;
+    if (perfect) eyebrow = 'Perfect night';
+    if (d.raid === 1 && !over) lede += d.escaped.length
+      ? ' Anyone who escapes adds what they saw to the Guild’s map (press G or the Guild’s map button to see it), and the next party plans around it.'
+      : ' Nobody got out, so the guild still knows nothing about your dungeon. Keep it that way.';
+    if (perfect || (over && G.result === 'won') || d.killed.some((h) => h.title)) P.happytime();
+    sfx(over ? (G.result === 'won' ? 'win' : 'lose') : 'dawn');
+    const revive = over && canRevive();
     const a = RD.assess(G);
     openModal(`
       <p class="eyebrow">${eyebrow}</p>
@@ -494,21 +564,99 @@
       </dl>
       <div class="cols">
         <div><h3>Slain</h3><ul class="names">${names(d.killed, 'k')}</ul></div>
-        <div><h3>Escaped</h3><ul class="names">${names(d.escaped, 'e', (h) => (h.carry ? ` · ${h.carry} gold` : ''))}</ul></div>
+        <div><h3>Escaped</h3><ul class="names">${names(d.escaped, 'e', (h) => (h.carry ? ` · ${h.carry} gold` : '') + (h.growth ? ` · <span class="growth">${esc(h.growth)}</span>` : ''))}</ul></div>
       </div>
       ${rum ? `<h3>What the guild heard</h3><ul class="rumors">${rum}</ul>` : ''}
       <div class="seedrow">
-        ${over ? `<button type="button" class="go" id="again" data-focus>Wake a new dungeon</button>${G.result === 'won' ? '<button type="button" class="ghost" id="endless">Keep going (endless)</button>' : ''}` : `<button type="button" class="go" id="next" data-focus>Prepare the next night</button>`}
+        ${revive ? '<button type="button" class="go plain pair" id="again" data-focus>Accept defeat</button><button type="button" class="go rewarded pair" id="revive">🎬 Second chance: refill the hoard</button>' : over ? `<button type="button" class="go" id="again" data-focus>Wake a new dungeon</button>${G.result === 'won' ? '<button type="button" class="ghost" id="endless">Keep going (endless)</button>' : ''}` : `<button type="button" class="go" id="next" data-focus>Prepare the next night</button>`}
         <button type="button" class="ghost" id="log-btn">Full raid log</button>
       </div>`, (s) => {
+      countUp(s);
+      const go = (ad) => {
+        const next = () => { RD.nextNight(G); save(); RD.FX.floaters.length = RD.FX.parts.length = 0; closeModal(); renderAll(); announce(); };
+        // a natural break between nights, never in the first few minutes
+        if (ad && G.raid >= 3) P.midgame(next);
+        else next();
+      };
       const n = s.querySelector('#next');
-      if (n) n.onclick = () => { RD.nextNight(G); save(); RD.FX.floaters.length = RD.FX.parts.length = 0; closeModal(); renderAll(); announce(); };
+      if (n) n.onclick = () => go(true);
+      const rv = s.querySelector('#revive');
+      if (rv) rv.onclick = () => P.rewarded((ok) => {
+        if (!ok) return toast('No ad was available. You can still accept defeat.');
+        G.stats.revived = true;
+        G.gold = Math.max(40, Math.round(RD.DIFF[G.diff].gold * 0.6));
+        G.result = null;
+        G.phase = 'debrief';
+        go(false);
+        toast(`The hoard is refilled with ${G.gold} gold. This only happens once per dungeon.`, true);
+      });
       const ag = s.querySelector('#again');
-      if (ag) ag.onclick = () => showIntro();
+      if (ag) ag.onclick = () => { if (G.phase === 'over') { saveRecord(); store.del('save'); } showIntro(); };
       const en = s.querySelector('#endless');
       if (en) en.onclick = () => { G.endless = true; G.phase = 'debrief'; RD.nextNight(G); save(); closeModal(); renderAll(); announce(); };
       s.querySelector('#log-btn').onclick = () => showReports(0, true);
     });
+  }
+
+  // dawn report numbers tick up instead of appearing
+  function countUp(root) {
+    for (const dd of root.querySelectorAll('.tally dd')) {
+      const to = parseInt(dd.textContent, 10);
+      if (!Number.isFinite(to) || to <= 0) continue;
+      const t0 = performance.now();
+      const tick = (now) => {
+        const f = Math.min(1, (now - t0) / 700);
+        dd.textContent = Math.round(to * (1 - (1 - f) ** 3));
+        if (f < 1) requestAnimationFrame(tick);
+      };
+      dd.textContent = '0';
+      requestAnimationFrame(tick);
+    }
+  }
+
+  // ---------------------------------------------------------------- the guided first night
+  // Four short steps: place a trap on the heroes' path, place a monster by the hoard, open the gate, watch.
+  function routeTiles() {
+    const { prev } = RD.dijkstra(G, G.entrance, (j) => (G.tiles[j] ? 1 : Infinity));
+    const p = [];
+    for (let s = G.hoard; s >= 0 && s !== G.entrance; s = prev[s]) p.push(s);
+    return p.reverse();
+  }
+  function coach(html, marks) {
+    $('coach').hidden = !html;
+    $('coach-text').innerHTML = html || '';
+    RD.view.marks = marks || [];
+    $('go').classList.toggle('pulse', ui.tut === 3);
+  }
+  function endTutorial() {
+    ui.tut = 0;
+    coach(null);
+    store.set('tut', 'done');
+  }
+  function tutorial(ev, d) {
+    if (ev === 'start') {
+      ui.tut = 1;
+      selectTool('spikes');
+      const r = routeTiles();
+      const spot = r.slice(Math.floor(r.length * 0.3)).find((t) => !RD.check(G, 'spikes', t));
+      coach('Heroes come in through the bright <b>gate</b> and head for your <b>gold</b>. The Spike Pit is selected: put it on their path, for example on the glowing tile.', [G.entrance, G.hoard, spot].filter((t) => t != null));
+      return;
+    }
+    if (!ui.tut) return;
+    if (ev === 'placed' && ui.tut === 1 && d.kind === 'trap') {
+      ui.tut = 2;
+      selectTool('skeleton');
+      const r = routeTiles();
+      const spot = r.slice().reverse().slice(1, 6).find((t) => !RD.check(G, 'skeleton', t));
+      coach('Now a monster. The <b>Skeleton</b> is selected: put it near your gold. Monsters fight any hero who comes close.', [spot, G.hoard].filter((t) => t != null));
+    } else if (ev === 'placed' && ui.tut === 2 && d.kind === 'monster') {
+      ui.tut = 3;
+      coach('Ready. Press <b>Open the gate</b>. Kill every hero and the guild learns nothing about you.', []);
+    } else if (ev === 'raid') {
+      ui.tut = 4;
+      coach('Watch the raid. Survivors carry a report back to the guild. You can also speed it up below.', []);
+      setTimeout(() => { if (ui.tut === 4) endTutorial(); }, 9000);
+    }
   }
 
   // The last five raids, kept in the save so they survive a refresh.
@@ -517,7 +665,7 @@
     if (!H.length) return;
     i = Math.max(0, Math.min(H.length - 1, i));
     const r = H[i];
-    const names = (list, cls) => list.length ? list.map((h) => heroLi(h, cls, h.carry ? ` · ${h.carry} gold` : '')).join('') : '<li class="empty">None</li>';
+    const names = (list, cls) => list.length ? list.map((h) => heroLi(h, cls, (h.carry ? ` · ${h.carry} gold` : '') + (h.growth ? ` · <span class="growth">${esc(h.growth)}</span>` : ''))).join('') : '<li class="empty">None</li>';
     openModal(`
       <p class="eyebrow">Raid reports</p>
       <h2 id="sheet-title">Night ${r.raid}</h2>
@@ -560,6 +708,8 @@
     ui.carry = null;
     ui.power = null;
     ui.hoverIt = null;
+    ui.armed = -1;
+    if (ui.tut) { ui.tut = 0; coach(null); }
     setSpeed(1);
     RD.view.floor = 0;
     RD.fxFloor(0);
@@ -569,11 +719,10 @@
     renderAll();
   }
 
+  // the map fills whatever room the board area has
   function fit() {
     const wrap = $('board-wrap');
-    const w = wrap.clientWidth - 18;
-    const h = Math.max(300, window.innerHeight - 290);
-    RD.resize(w, h);
+    RD.resize(Math.max(200, wrap.clientWidth - 10), Math.max(140, wrap.clientHeight - 10));
   }
 
   function bind() {
@@ -591,9 +740,48 @@
       if (ui.hoverIt) { ui.hoverIt = null; renderDetail(); }
       if (G && G.phase === 'build') $('hint').textContent = 'Pick a blueprint, then click the map.';
     });
-    cv.addEventListener('click', (e) => { const i = canvasTile(e); RD.view.hover = i; click(i); });
+    cv.addEventListener('pointerdown', (e) => { ui.touch = e.pointerType !== 'mouse'; });
+    // touch: the first tap shows what would happen (details, range, outline), the second tap does it
+    cv.addEventListener('click', (e) => {
+      const i = canvasTile(e);
+      const aiming = G.phase === 'build' || (G.phase === 'raid' && ui.power === 'tremor');
+      if (ui.touch && aiming && i >= 0 && ui.armed !== i) {
+        ui.armed = i;
+        RD.view.hover = i;
+        ui.hoverIt = null;
+        preview(i);
+        if (G.phase === 'raid') toast('Tap again to strike here.', true);
+        return;
+      }
+      ui.armed = -1;
+      RD.view.hover = i;
+      click(i);
+    });
     cv.addEventListener('contextmenu', (e) => { e.preventDefault(); ui.carry = null; ui.power = null; renderDetail(); });
     $('go').onclick = startRaid;
+    $('cancel').onclick = () => { ui.carry = null; ui.armed = -1; renderDetail(); };
+    const drawer = (open) => { $('ledger').classList.toggle('open', open); $('ledger-btn').setAttribute('aria-expanded', open); };
+    $('ledger-btn').onclick = () => drawer(!$('ledger').classList.contains('open'));
+    $('ledger-close').onclick = () => drawer(false);
+    $('coach-skip').onclick = endTutorial;
+    const soundBtn = $('sound-btn');
+    const setSound = (v, keep) => { RD.audio.setOn(v); soundBtn.setAttribute('aria-pressed', v); if (keep) store.set('sound', v); };
+    soundBtn.onclick = () => setSound(!RD.audio.isOn(), true);
+    setSound(store.get('sound', true) && !P.muted(), false);
+    P.onMute = (m) => setSound(!m && store.get('sound', true), false);
+    // browsers only allow sound after a gesture
+    const unlock = () => RD.audio.unlock();
+    document.addEventListener('pointerdown', unlock, { passive: true });
+    document.addEventListener('keydown', unlock);
+    document.addEventListener('click', (e) => { if (e.target.closest('.card, .tool, .floor, .seg button, .icon-btn')) sfx('click'); });
+    // freeze everything while an ad plays or the tab is hidden
+    P.onPause = () => { ui.adPause = true; RD.audio.duck(true); };
+    P.onResume = () => { ui.adPause = false; RD.audio.duck(false); lastT = performance.now(); };
+    document.addEventListener('visibilitychange', () => { RD.audio.duck(document.hidden || ui.adPause); lastT = performance.now(); });
+    // keep keys and the wheel from scrolling a portal's page
+    window.addEventListener('keydown', (e) => { if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && e.target.tagName !== 'INPUT') e.preventDefault(); });
+    cv.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+    if (window.ResizeObserver) new ResizeObserver(() => { if (G) fit(); }).observe($('board-wrap'));
     $('view-truth').onclick = () => setView(false);
     $('view-guild').onclick = () => setView(true);
     for (const b of document.querySelectorAll('.speed button')) b.onclick = () => setSpeed(+b.dataset.speed);
@@ -607,7 +795,7 @@
       } else if (e.key === 'g' || e.key === 'G') setView(!RD.view.guildMap);
       else if (e.key === '[') setFloor(RD.view.floor - 1, true);
       else if (e.key === ']') setFloor(RD.view.floor + 1, true);
-      else if (e.key === 'Escape') { ui.carry = null; ui.power = null; renderDetail(); if (G.phase === 'raid') renderPowers(); }
+      else if (e.key === 'Escape') { ui.carry = null; ui.power = null; ui.armed = -1; renderDetail(); if (G.phase === 'raid') renderPowers(); }
       else if (G.phase === 'raid' && '124'.includes(e.key)) setSpeed(+e.key);
     });
     $('modal').addEventListener('keydown', (e) => { if (e.key === 'Escape' && G && G.phase !== 'over' && G.phase !== 'debrief') closeModal(); });
@@ -625,7 +813,8 @@
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000);
     lastT = now;
-    if (G) {
+    // browsers stop animation frames in hidden tabs on their own; ads need an explicit freeze
+    if (G && !ui.adPause) {
       if (G.phase === 'raid' && ui.speed > 0 && !isOpen()) {
         let t = dt * ui.speed;
         while (t > 1e-6 && G.phase === 'raid') { const s = Math.min(t, 1 / 60); RD.step(G, s); t -= s; }
@@ -646,8 +835,12 @@
     requestAnimationFrame(frame);
   }
 
-  function boot() {
+  async function boot() {
+    P.loadingStart();
+    await P.init();
+    probeStorage();
     bind();
+    ui.diff = store.get('diff', null) || (store.get('best', null) ? 'normal' : 'easy');
     let loaded = null;
     try { loaded = RD.loadGame(store.get('save', null)); } catch (e) { loaded = null; }
     if (!loaded) store.del('save');
@@ -655,6 +848,10 @@
     newGame((Math.random() * 1e6) | 0, loaded, ui.diff);
     showIntro();
     requestAnimationFrame(frame);
+    // the cached map layer draws text, so redraw it once the bundled fonts are in
+    const done = () => { RD.view.dirty = true; fit(); P.loadingStop(); };
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(done, done);
+    else done();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

@@ -13,11 +13,12 @@
     venom: '#86c06a', fire: '#ff8a3d', violet: '#b38be0', iron: '#5b5562', frost: '#cfe9ff',
     hero: {
       knight: '#d6dde8', rogue: '#7fbca6', mage: '#98a4f4', cleric: '#f0d9a0', scout: '#9fd2e9',
-      paladin: '#ffe6a3', swordsaint: '#f4f4f4', shadow: '#6a6f8a', archmage: '#c9a8ff', saint: '#fff3cf', chosen: '#ffd34d',
+      ranger: '#9bc47a', berserker: '#e08a6a', alchemist: '#7fd6c2', bard: '#e7a8d8',
+      paladin: '#ffe6a3', swordsaint: '#f4f4f4', shadow: '#6a6f8a', archmage: '#c9a8ff', saint: '#fff3cf', dragonslayer: '#ff9a5c', chosen: '#ffd34d',
     },
   });
 
-  const V = (RD.view = { canvas: null, ctx: null, T: 32, M: 18, dpr: 1, hover: -1, guildMap: false, staticC: null, dirty: true, time: 0, floor: 0, drawn: -1 });
+  const V = (RD.view = { canvas: null, ctx: null, T: 32, M: 18, dpr: 1, hover: -1, guildMap: false, staticC: null, dirty: true, time: 0, floor: 0, drawn: -1, marks: [] });
 
   RD.initRender = function (canvas) {
     V.canvas = canvas;
@@ -673,6 +674,11 @@
       case 'cleric': c.fillRect(-k * 0.25, -k, k * 0.5, k * 2); c.fillRect(-k * 0.8, -k * 0.45, k * 1.6, k * 0.5); break;
       case 'saint': c.beginPath(); c.arc(0, 0, k * 0.8, 0, Math.PI * 2); c.stroke(); c.fillRect(-k * 0.2, -k * 0.6, k * 0.4, k * 1.2); break;
       case 'swordsaint': c.beginPath(); c.moveTo(-k, k); c.lineTo(k, -k); c.moveTo(k, k); c.lineTo(-k, -k); c.stroke(); break;
+      case 'ranger': c.beginPath(); c.arc(-k * 0.3, 0, k, -Math.PI / 2, Math.PI / 2); c.moveTo(-k * 0.3, -k); c.lineTo(-k * 0.3, k); c.moveTo(-k, 0); c.lineTo(k, 0); c.stroke(); break;
+      case 'berserker': c.beginPath(); c.moveTo(0, -k); c.lineTo(0, k * 1.1); c.stroke(); c.beginPath(); c.moveTo(0, -k * 0.8); c.quadraticCurveTo(k * 1.1, -k * 0.6, k * 0.9, k * 0.2); c.lineTo(0, -k * 0.1); c.fill(); c.beginPath(); c.moveTo(0, -k * 0.8); c.quadraticCurveTo(-k * 1.1, -k * 0.6, -k * 0.9, k * 0.2); c.lineTo(0, -k * 0.1); c.fill(); break;
+      case 'alchemist': c.beginPath(); c.moveTo(-k * 0.25, -k); c.lineTo(k * 0.25, -k); c.lineTo(k * 0.25, -k * 0.3); c.lineTo(k * 0.9, k * 0.9); c.lineTo(-k * 0.9, k * 0.9); c.lineTo(-k * 0.25, -k * 0.3); c.closePath(); c.fill(); break;
+      case 'bard': c.beginPath(); c.arc(-k * 0.35, k * 0.6, k * 0.4, 0, Math.PI * 2); c.fill(); c.fillRect(-k * 0.05, -k, k * 0.22, k * 1.6); c.beginPath(); c.moveTo(k * 0.17, -k); c.quadraticCurveTo(k * 1, -k * 0.7, k * 0.6, -k * 0.1); c.stroke(); break;
+      case 'dragonslayer': c.fillRect(-k * 0.12, -k * 1.2, k * 0.24, k * 1.7); c.fillRect(-k * 0.75, k * 0.35, k * 1.5, k * 0.25); c.beginPath(); c.arc(0, k * 0.95, k * 0.22, 0, Math.PI * 2); c.fill(); break;
       case 'shadow': c.beginPath(); c.arc(0, 0, k, Math.PI * 0.3, Math.PI * 1.7); c.arc(k * 0.4, 0, k * 0.8, Math.PI * 1.6, Math.PI * 0.4, true); c.fill(); break;
       case 'chosen':
         c.beginPath(); c.moveTo(0, -k * 1.3); c.lineTo(k * 0.25, -k * 0.2); c.lineTo(-k * 0.25, -k * 0.2); c.closePath(); c.fill();
@@ -913,6 +919,16 @@
     }
 
     if (V.guildMap) drawGuildMap(c, G, R ? (R.feud ? G.guild.K : R.shared) : G.guild.K);
+
+    // tutorial markers: pulsing gold rings on the tiles the coach is talking about
+    for (const g of V.marks) {
+      if (!on(g)) continue;
+      const [cx, cy] = tc(g);
+      const p = 0.5 + 0.5 * Math.sin(V.time * 4);
+      c.strokeStyle = `rgba(227,176,75,${0.45 + 0.45 * p})`;
+      c.lineWidth = 3;
+      c.beginPath(); c.arc(cx, cy, T * (0.46 + 0.08 * p), 0, Math.PI * 2); c.stroke();
+    }
 
     if (hov >= 0 && G.phase === 'build') {
       const [x, y] = xy(hov);

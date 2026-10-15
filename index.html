@@ -6,102 +6,111 @@
 <title>The Reverse Dungeon</title>
 <meta name="description" content="A dungeon-builder where you play the dungeon. Heroes learn your traps and tell the guild, so you rebuild between raids.">
 <meta name="theme-color" content="#0d0b10">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Jacquard+24&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=11">
+<link rel="preload" href="fonts/AlegreyaSans-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="fonts/fonts.css?v=18">
+<link rel="stylesheet" href="css/style.css?v=18">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0b10'/%3E%3Cpath d='M6 28V12a10 10 0 0 1 20 0v16' fill='none' stroke='%23c43c68' stroke-width='3'/%3E%3Ccircle cx='16' cy='21' r='3' fill='%23e3b04b'/%3E%3C/svg%3E">
 </head>
 <body>
 
-<header class="top">
-  <div class="brand">
-    <h1>The Reverse Dungeon</h1>
-    <p>You are the dungeon. They are taking notes.</p>
-  </div>
-  <dl class="stats">
-    <div><dt>Raid</dt><dd id="st-raid">1</dd></div>
-    <div class="gold"><dt>Hoard</dt><dd id="st-gold">100</dd></div>
-    <div class="malice"><dt>Malice</dt><dd id="st-malice">0</dd></div>
-    <div class="rating"><dt>Guild rating</dt><dd id="st-rating">F</dd></div>
-    <div class="steel"><dt>Guild map</dt><dd id="st-known">0%</dd></div>
-  </dl>
-  <button type="button" class="ghost menu" id="menu">New dungeon</button>
-</header>
+<div class="app" id="app">
+  <header class="top">
+    <h1 class="logo">Reverse Dungeon</h1>
+    <dl class="stats">
+      <div><dt>Night</dt><dd id="st-raid">1</dd></div>
+      <div class="gold"><dt>Hoard</dt><dd id="st-gold">100</dd></div>
+      <div class="malice"><dt>Malice</dt><dd id="st-malice">0</dd></div>
+      <div class="rating"><dt>Rating</dt><dd id="st-rating">F</dd></div>
+      <div class="steel"><dt>Mapped</dt><dd id="st-known">0%</dd></div>
+    </dl>
+    <div class="topbtns">
+      <button type="button" class="icon-btn" id="ledger-btn" aria-controls="ledger" aria-expanded="false" title="The Guild Ledger">Ledger</button>
+      <button type="button" class="icon-btn" id="sound-btn" aria-pressed="true" title="Sound on or off">Sound</button>
+      <button type="button" class="icon-btn" id="menu" title="New dungeon or resume">Menu</button>
+    </div>
+  </header>
 
-<main class="layout">
-  <aside class="panel blueprints" id="blueprints" aria-label="Blueprints">
-    <h2>Blueprints</h2>
-    <div class="tools" id="tools"></div>
-    <div class="detail" id="detail" aria-live="polite"></div>
-    <h3>Always in stock</h3>
-    <div class="cards" id="basic"></div>
-    <h3>Tonight’s offers</h3>
-    <div class="cards" id="offers"></div>
-    <h3>Bosses</h3>
-    <div class="cards" id="bosses"></div>
-    <p class="unlock" id="unlock"></p>
-  </aside>
+  <main class="layout">
+    <aside class="panel blueprints" id="blueprints" aria-label="Blueprints">
+      <div class="tools" id="tools"></div>
+      <div class="detail" id="detail" aria-live="polite"></div>
+      <div class="scroll">
+        <h3>Tonight’s deals · 30% off</h3>
+        <div class="cards" id="offers"></div>
+        <div id="catalog"></div>
+        <p class="unlock" id="unlock"></p>
+      </div>
+    </aside>
 
-  <section class="stage">
-    <div class="stagebar">
-      <div class="omen" id="omen"></div>
-      <div class="controls">
+    <section class="stage">
+      <div class="stagebar">
+        <div class="omen" id="omen"></div>
+        <div class="floors" id="floors" role="group" aria-label="Floors"></div>
         <div class="seg" role="group" aria-label="Map view">
-          <button type="button" id="view-truth" class="on" aria-pressed="true">Your dungeon</button>
+          <button type="button" id="view-truth" class="on" aria-pressed="true">Yours</button>
           <button type="button" id="view-guild" aria-pressed="false">Guild’s map <kbd>G</kbd></button>
         </div>
       </div>
-    </div>
-    <div class="floors" id="floors" role="group" aria-label="Floors"></div>
-    <div class="board-wrap" id="board-wrap">
-      <canvas id="board" aria-label="The dungeon map"></canvas>
-      <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    </div>
-    <div class="actionbar" id="actionbar">
-      <div class="build-actions" id="build-actions">
-        <p class="hint" id="hint">Pick a blueprint, then click the map.</p>
-        <button type="button" class="go" id="go">Open the gate <kbd>Space</kbd></button>
-      </div>
-      <div class="raid-actions" id="raid-actions" hidden>
-        <div class="powers" id="powers"></div>
-        <div class="seg speed" role="group" aria-label="Speed">
-          <button type="button" data-speed="0" id="pause">Pause</button>
-          <button type="button" data-speed="1" class="on">1×</button>
-          <button type="button" data-speed="2">2×</button>
-          <button type="button" data-speed="4">4×</button>
+      <div class="board-wrap" id="board-wrap">
+        <canvas id="board" aria-label="The dungeon map"></canvas>
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
+        <div class="coach" id="coach" hidden>
+          <p id="coach-text"></p>
+          <button type="button" class="ghost small" id="coach-skip">Skip tutorial</button>
         </div>
       </div>
-    </div>
-  </section>
+      <div class="actionbar" id="actionbar">
+        <div class="build-actions" id="build-actions">
+          <p class="hint" id="hint">Pick a blueprint, then click the map.</p>
+          <button type="button" class="ghost" id="cancel" hidden>Cancel</button>
+          <button type="button" class="go" id="go">Open the gate <kbd>Space</kbd></button>
+        </div>
+        <div class="raid-actions" id="raid-actions" hidden>
+          <div class="powers" id="powers"></div>
+          <div class="seg speed" role="group" aria-label="Speed">
+            <button type="button" data-speed="0" id="pause">Pause</button>
+            <button type="button" data-speed="1" class="on">1×</button>
+            <button type="button" data-speed="2">2×</button>
+            <button type="button" data-speed="4">4×</button>
+          </div>
+        </div>
+      </div>
+    </section>
 
-  <aside class="panel ledger" aria-label="The Guild Ledger">
-    <h2>The Guild Ledger</h2>
-    <section>
-      <h3 id="party-h">Coming tonight</h3>
-      <p class="adapt" id="adapt"></p>
-      <ul class="party" id="party"></ul>
-    </section>
-    <section>
-      <h3>Tavern talk</h3>
-      <ul class="rumors" id="rumors"></ul>
-    </section>
-    <section>
-      <h3 id="log-h">Raid log</h3>
-      <ol class="log" id="log"></ol>
-      <button type="button" class="ghost small" id="reports">Raid reports</button>
-    </section>
-  </aside>
-</main>
+    <aside class="panel ledger" id="ledger" aria-label="The Guild Ledger">
+      <button type="button" class="ghost small close" id="ledger-close">Close</button>
+      <section>
+        <h3 id="party-h">Coming tonight</h3>
+        <p class="adapt" id="adapt"></p>
+        <ul class="party" id="party"></ul>
+      </section>
+      <section>
+        <h3>Tavern talk</h3>
+        <ul class="rumors" id="rumors"></ul>
+      </section>
+      <section>
+        <h3 id="log-h">Raid log</h3>
+        <ol class="log" id="log"></ol>
+        <button type="button" class="ghost small" id="reports">Raid reports</button>
+      </section>
+    </aside>
+  </main>
+</div>
+
+<div class="rotate" id="rotate">
+  <p>Turn your device sideways to play.</p>
+</div>
 
 <div class="modal" id="modal" hidden>
   <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"></div>
 </div>
 
-<script src="js/data.js?v=11"></script>
-<script src="js/world.js?v=11"></script>
-<script src="js/sim.js?v=11"></script>
-<script src="js/render.js?v=11"></script>
-<script src="js/ui.js?v=11"></script>
+<script src="js/data.js?v=18"></script>
+<script src="js/world.js?v=18"></script>
+<script src="js/sim.js?v=18"></script>
+<script src="js/render.js?v=18"></script>
+<script src="js/audio.js?v=18"></script>
+<script src="js/portal.js?v=18"></script>
+<script src="js/ui.js?v=18"></script>
 </body>
 </html>

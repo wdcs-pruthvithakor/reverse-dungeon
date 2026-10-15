@@ -6,7 +6,7 @@
   RD.COLS = 17;
   RD.ROWS = 11;
   RD.N = RD.COLS * RD.ROWS;
-  RD.RAID_TIME_LIMIT = 200;
+  RD.raidTime = (G) => 140 + 60 * G.floors; // deeper dungeons get longer nights
 
   // ---------------------------------------------------------------- seeded randomness
   RD.makeRng = function (seed) {
@@ -66,17 +66,20 @@
   RD.FLOOR_COST = [0, 40, 110, 240, 420];
   RD.ROMAN = ['I', 'II', 'III', 'IV', 'V'];
 
-  // Levels raise a piece within its rank. Lv5 is about one rank higher.
+  // Levels raise a piece within its rank. Lv5 is about one rank higher. Every level adds 15% to damage,
+  // health and how long a trap holds a hero (pin, confuse, slow, stun), and cuts rearm time by 6%.
   RD.MAX_LEVEL = 5;
   RD.levelMult = (lv) => 1 + 0.15 * ((lv || 1) - 1);
   RD.levelCost = (it) => Math.round(RD.ITEMS[it.type].cost * 0.5 * (it.lv || 1));
+  RD.lvDur = (d, key, lv) => d[key] * RD.levelMult(lv);
+  RD.lvRearm = (d, lv) => d.rearm * (1 - 0.06 * ((lv || 1) - 1));
 
   // ---------------------------------------------------------------- difficulty
   RD.DIFF = {
-    easy: { name: 'Apprentice', blurb: 'Deeper pockets, gentler heroes. Learn how the guild thinks.', gold: 160, malice: 170, income: 1.3, hero: 0.8, drift: 0.75, party: -1, rare: 0.6, win: 20 },
-    normal: { name: 'Keeper', blurb: 'The game as designed.', gold: 130, malice: 150, income: 1.05, hero: 0.95, drift: 1, party: 0, rare: 1, win: 25 },
-    hard: { name: 'Overlord', blurb: 'Leaner nights, tougher heroes, and the guild climbs the ranks faster.', gold: 120, malice: 140, income: 0.95, hero: 1.08, drift: 1.15, party: 0, rare: 1.5, win: 25 },
-    nightmare: { name: 'Abyss', blurb: 'Bigger parties, legends walk in often, and every coin is hard won.', gold: 110, malice: 135, income: 0.9, hero: 1.2, drift: 1.3, party: 1, rare: 2.2, win: 30 },
+    easy: { name: 'Apprentice', blurb: 'Deeper pockets, gentler heroes. Learn how the guild thinks.', gold: 160, malice: 170, income: 1.3, hero: 0.8, drift: 0.75, party: -1, rare: 0.6, growth: 0.02, win: 20 },
+    normal: { name: 'Keeper', blurb: 'The game as designed.', gold: 130, malice: 150, income: 1.05, hero: 0.95, drift: 1, party: 0, rare: 1, growth: 0.03, win: 25 },
+    hard: { name: 'Overlord', blurb: 'Leaner nights, tougher heroes, and the guild climbs the ranks faster.', gold: 120, malice: 140, income: 0.95, hero: 1.08, drift: 1.15, party: 0, rare: 1.5, growth: 0.04, win: 25 },
+    nightmare: { name: 'Abyss', blurb: 'Bigger parties, legends walk in often, and every coin is hard won.', gold: 130, malice: 150, income: 0.95, hero: 1.05, drift: 1.25, party: 1, rare: 2.2, growth: 0.045, win: 30 },
   };
 
   // ---------------------------------------------------------------- what the dungeon can build
@@ -91,8 +94,8 @@
       desc: 'Hidden pit. Hurts whoever steps in, half as much if they knew it was there.' },
     snare: { name: 'Bear Trap', tier: 1, cost: 22, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dmg: 16, root: 3, rearm: 5,
       desc: 'Iron jaws. Pins the hero in place for 3s so your monsters can catch up.' },
-    maze: { name: 'Wandering Rune', tier: 1, cost: 26, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'illusion', confuse: 5, rearm: 6,
-      desc: 'Hidden glyph. The hero who steps on it wanders aimlessly for 5s.' },
+    maze: { name: 'Wandering Rune', tier: 1, cost: 26, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'illusion', dmg: 8, confuse: 5, rearm: 6,
+      desc: 'Hidden glyph. The hero who steps on it wanders aimlessly for 5s. Levels make the daze last longer.' },
     vent: { name: 'Miasma Vent', tier: 2, cost: 36, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dps: 6, dur: 4, radius: 1.5, rearm: 8,
       desc: 'Hidden grate. Fills a 3×3 area with bad air for 4s.' },
     rune: { name: 'Fire Rune', tier: 2, cost: 40, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'trap', dmg: 22, radius: 1.5, oneShot: true,
@@ -161,15 +164,35 @@
   RD.BASIC = ['spikes', 'darts', 'goblin', 'skeleton', 'door'];
   RD.SPECIAL = Object.keys(RD.ITEMS).filter((k) => !RD.BASIC.includes(k) && !RD.ITEMS[k].boss && !RD.ITEMS[k].summonOnly);
   RD.BOSSES = Object.keys(RD.ITEMS).filter((k) => RD.ITEMS[k].boss);
+  // the catalogue, grouped the way the blueprint panel shows it
+  RD.GROUPS = [
+    { id: 'traps', name: 'Traps', kinds: ['trap'] },
+    { id: 'walls', name: 'Walls & doors', kinds: ['turret', 'door'] },
+    { id: 'monsters', name: 'Monsters', kinds: ['monster'], boss: false },
+    { id: 'bosses', name: 'Bosses', kinds: ['monster'], boss: true },
+  ];
+  RD.inGroup = (g, k) => {
+    const d = RD.ITEMS[k];
+    return !d.summonOnly && g.kinds.includes(d.kind) && (g.boss == null || !!d.boss === g.boss);
+  };
 
-  // A piece's real numbers: rank × level. `key` is a stat listed at rank F.
-  RD.scaled = (type, key, lv) => RD.ITEMS[type][key] * RD.TIER_MULT[RD.ITEMS[type].tier] * RD.levelMult(lv);
+  // Balance dials, tuned with headless bot games. Monsters and traps scale with these on top of rank and level.
+  RD.BAL = { monHp: 1.5, monDmg: 1.2, trapDmg: 1.3, theft: 1 };
+  RD.balOf = (type, key) => {
+    const d = RD.ITEMS[type];
+    if (d.kind === 'monster') return key === 'hp' ? RD.BAL.monHp : key === 'dmg' || key === 'breath' || key === 'quake' ? RD.BAL.monDmg : 1;
+    if (d.kind === 'trap' || d.kind === 'turret') return key === 'dmg' || key === 'dps' ? RD.BAL.trapDmg : 1;
+    return 1;
+  };
+
+  // A piece's real numbers: rank × level × balance. `key` is a stat listed at rank F.
+  RD.scaled = (type, key, lv, tier) => RD.ITEMS[type][key] * RD.TIER_MULT[tier == null ? RD.ITEMS[type].tier : tier] * RD.levelMult(lv) * RD.balOf(type, key);
 
   RD.TOOLS = {
     dig: { name: 'Dig', cost: 6, desc: 'Carve rock into corridor. The outer wall cannot be dug.' },
     fill: { name: 'Fill', cost: 3, desc: 'Collapse an empty corridor tile into rock. The hoard must stay reachable.' },
     move: { name: 'Move', cost: 0, desc: 'Pick up a trap, monster or door and set it down somewhere else, on any floor. Free.' },
-    upgrade: { name: 'Level up', cost: 0, desc: 'Click a placed piece to raise its level within its rank (up to Lv5). Each level adds 15% to its damage, health or toughness. Hover a piece to see the before and after.' },
+    upgrade: { name: 'Level up', cost: 0, desc: 'Click a placed piece to raise its level within its rank (up to Lv5). Each level adds 15% to damage and health, 15% to how long it pins, dazes, slows or stuns, and makes traps rearm 6% faster. Hover a piece to see the before and after.' },
     hoard: { name: 'Move Hoard', cost: 25, desc: 'Haul your treasure to another tile. Heroes who knew the old spot will be wrong.' },
     sell: { name: 'Sell', cost: 0, desc: 'Remove a piece and get back 60% of everything spent on it.' },
   };
@@ -194,6 +217,16 @@
       desc: 'Mends nearby allies. Shatters the undead.' },
     scout: { name: 'Scout', hp: 55, speed: 2.7, dmg: 10, rate: 0.9, range: 3.1, vision: 5, brave: 0.2, greed: 0.4, fleeAt: 0.45, bash: 10, w: 1.6,
       desc: 'Sees far and runs early. The likeliest to bring a map home.' },
+    ranger: { name: 'Ranger', minTier: 1, hp: 70, speed: 2.2, dmg: 14, rate: 1.0, range: 3.4, vision: 4, brave: 0.4, greed: 0.3, fleeAt: 0.35, bash: 12,
+      detect: { mech: 0.35 }, detectR: 1.5, w: 1.4,
+      desc: 'Shoots from far back and has a nose for snares and pits.' },
+    berserker: { name: 'Berserker', minTier: 2, hp: 135, speed: 1.9, dmg: 17, rate: 0.8, range: 1.15, vision: 3, brave: 0.95, greed: 0.4, fleeAt: 0.06, bash: 55, rage: 1, w: 1.2,
+      desc: 'Hits harder the more it bleeds, up to double damage near death. Almost never runs.' },
+    alchemist: { name: 'Alchemist', minTier: 3, hp: 65, speed: 1.8, dmg: 15, rate: 1.3, range: 2.4, splash: 1.2, vision: 3, brave: 0.4, greed: 0.5, fleeAt: 0.35, bash: 15,
+      cure: 2.5, detect: { mech: 0.2, magic: 0.35 }, detectR: 1.5, w: 1,
+      desc: 'Throws flasks that splash every monster nearby, and frees allies from pins, dazes and slows.' },
+    bard: { name: 'Bard', minTier: 4, hp: 80, speed: 2.0, dmg: 9, rate: 1.0, range: 2.2, vision: 4, brave: 0.5, greed: 0.5, fleeAt: 0.3, bash: 12, inspire: 0.25, w: 0.9,
+      desc: 'Allies within 2½ tiles deal 25% more damage, move 10% faster and hold their nerve longer.' },
     // unique classes
     paladin: { name: 'Paladin', unique: true, minTier: 3, hp: 170, speed: 1.6, dmg: 16, rate: 1.0, range: 1.15, vision: 3, brave: 0.95, greed: 0.1, fleeAt: 0.12, bash: 50,
       heal: 5, healR: 2.2, holy: 2.5, w: 1,
@@ -209,19 +242,22 @@
     saint: { name: 'Saint', unique: true, minTier: 6, hp: 120, speed: 1.7, dmg: 12, rate: 1.0, range: 1.15, vision: 3, brave: 0.7, greed: 0.1, fleeAt: 0.2, bash: 20,
       heal: 16, healR: 3, holy: 4, revive: true, w: 0.5,
       desc: 'Unique. Heals the whole party and raises the first ally who falls.' },
+    dragonslayer: { name: 'Dragonslayer', unique: true, minTier: 5, hp: 210, speed: 1.8, dmg: 34, rate: 1.0, range: 1.25, vision: 3, brave: 1, greed: 0.2, fleeAt: 0.1, bash: 60,
+      slayer: 2, fireward: 0.5, w: 0.6,
+      desc: 'Unique. Hunts bosses: double damage against them and half damage from breath and quakes.' },
     chosen: { name: 'Chosen Hero', unique: true, minTier: 7, hp: 280, speed: 2.0, dmg: 42, rate: 0.9, range: 1.25, vision: 4, brave: 1, greed: 0, fleeAt: 0, bash: 80, slayer: 2.5, heal: 3, healR: 1.5, w: 0.15,
       desc: 'Unique. Born to end demon lords. Deals 2.5× damage to bosses and never runs.' },
   };
-  RD.COMMON = ['knight', 'rogue', 'mage', 'cleric', 'scout'];
+  RD.COMMON = ['knight', 'rogue', 'mage', 'cleric', 'scout', 'ranger', 'berserker', 'alchemist', 'bard'];
   RD.UNIQUE = Object.keys(RD.CLASSES).filter((k) => RD.CLASSES[k].unique);
-  RD.TITLES = { paladin: 'the Radiant', swordsaint: 'of the Thousand Cuts', shadow: 'the Unseen', archmage: 'the Starborn', saint: 'the Merciful', chosen: 'the Chosen' };
+  RD.TITLES = { paladin: 'the Radiant', swordsaint: 'of the Thousand Cuts', shadow: 'the Unseen', archmage: 'the Starborn', saint: 'the Merciful', dragonslayer: 'the Wyrmbane', chosen: 'the Chosen' };
 
   RD.TRAITS = {
     greedy: { name: 'Greedy', w: 3, desc: 'Detours for any chest it sees.' },
     coward: { name: 'Craven', w: 2, desc: 'Runs at half health.' },
     reckless: { name: 'Reckless', w: 2, desc: 'Ignores warnings and rarely retreats.' },
     keen: { name: 'Keen-eyed', w: 2, desc: 'Has a chance to spot any hidden trap next to it.' },
-    stone: { name: 'Sending Stone', w: 1.2, desc: 'Reports to the guild even if it dies.' },
+    stone: { name: 'Sending Stone', w: 1.2, desc: 'Reports to the guild even if it dies. The guild hands out more of them after a party vanishes.' },
     stout: { name: 'Stout', w: 2, desc: '+25% health.' },
     swift: { name: 'Swift', w: 2, desc: '+20% speed.' },
   };

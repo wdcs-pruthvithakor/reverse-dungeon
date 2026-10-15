@@ -82,6 +82,49 @@
     nightmare: { name: 'Abyss', blurb: 'Bigger parties, legends walk in often, and every coin is hard won.', gold: 130, malice: 150, income: 0.95, hero: 1.05, drift: 1.25, party: 1, rare: 2.2, growth: 0.045, win: 30 },
   };
 
+  // ---------------------------------------------------------------- modes
+  // `pace` compresses progression: a Quick night counts as 2.2 campaign nights for ranks, floors,
+  // guild strength and income, so a 12-night run still climbs from F to the Demon Lord.
+  RD.MODES = {
+    campaign: { name: 'Campaign', blurb: 'The full climb. Hold the nights your difficulty asks.', pace: 1, income: 1 },
+    quick: { name: 'Quick', blurb: '12 nights, every rank unlocks about twice as fast. 15 to 25 minutes.', pace: 2.2, income: 2.5, win: 12 },
+    daily: { name: 'Daily dungeon', blurb: 'Today’s seed, the same for everyone. Quick rules on Keeper. One best score per day.', pace: 2.2, income: 2.5, win: 12, diff: 'normal' },
+  };
+
+  // ---------------------------------------------------------------- trophies and pacts (kept between runs)
+  RD.TROPHIES = {
+    first_blood: { name: 'First Blood', desc: 'Slay your first hero.' },
+    perfect: { name: 'Nobody Leaves', desc: 'A perfect night: at least two heroes and nobody escapes.' },
+    survive5: { name: 'Still Standing', desc: 'Hold 5 nights in one dungeon.' },
+    legend: { name: 'Legend Killer', desc: 'Slay a legend.' },
+    maxed: { name: 'Masterwork', desc: 'Raise a piece to Lv5.' },
+    boss: { name: 'Throne Room', desc: 'Place your first boss.' },
+    deep: { name: 'Five Below', desc: 'Dig the fifth floor.' },
+    hunters: { name: 'Hunt Failed', desc: 'Kill a whole strike team in one night.' },
+    myth: { name: 'Mythmaker', desc: 'Place a myth boss.' },
+    lord: { name: 'Crowned in Fire', desc: 'Raise the Demon Lord.' },
+    chosen: { name: 'Fate Denied', desc: 'Slay the Chosen Hero.' },
+    rich: { name: 'Dragon’s Hoard', desc: 'Have 500 gold in the hoard.' },
+    win_any: { name: 'The Dungeon Endures', desc: 'Win any run.' },
+    quick: { name: 'Quick Study', desc: 'Win a Quick or Daily run.' },
+    daily: { name: 'Daily Grind', desc: 'Finish a daily dungeon, win or lose.' },
+    win_hard: { name: 'Overlord', desc: 'Win on Overlord or Abyss.' },
+    win_abyss: { name: 'The Abyss Gazes Back', desc: 'Win on Abyss.' },
+    slay100: { name: 'Bone Pile', desc: 'Slay 100 heroes across all your dungeons.' },
+  };
+  // A pact is a perk you take into a new dungeon. Each one is earned with a trophy.
+  RD.PACTS = {
+    tithe: { name: 'Blood Tithe', desc: 'Start with 60 more malice.', trophy: 'first_blood' },
+    purse: { name: 'Deep Pockets', desc: 'Start with 50 more gold in the hoard.', trophy: 'survive5' },
+    bones: { name: 'Bone Pact', desc: 'Monsters (not bosses) cost 15% less.', trophy: 'perfect' },
+    iron: { name: 'Iron Will', desc: 'Doors are 50% tougher and traps rearm 15% faster.', trophy: 'maxed' },
+    market: { name: 'Black Market', desc: 'Four deals a night, and rerolls cost 5 malice.', trophy: 'legend' },
+    wyrm: { name: 'Wyrm’s Debt', desc: 'Bosses cost 20% less.', trophy: 'boss' },
+    silence: { name: 'Silence', desc: 'Sending Stones are half as common.', trophy: 'win_any' },
+  };
+  // a run's score: nights held, heroes slain, legends, and a bonus for winning
+  RD.score = (G) => 20 * G.stats.held + 10 * G.stats.slain + 40 * G.stats.legends + (G.result === 'won' ? 250 + G.gold : 0);
+
   // ---------------------------------------------------------------- what the dungeon can build
   // Stats are listed at rank F; a piece's real numbers are multiplied by its rank and level.
   // kind: trap | turret | monster | door.  place: floor | wall.

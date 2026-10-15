@@ -608,6 +608,17 @@
   }
   RD.hexA = hexA;
 
+  // a small steel eye: "the guild knows about this"
+  function eye(c, x, y, r) {
+    c.fillStyle = 'rgba(13,11,16,0.85)';
+    c.beginPath(); c.arc(x, y, r * 1.35, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = P.steel;
+    c.lineWidth = Math.max(1, r * 0.35);
+    c.beginPath(); c.moveTo(x - r, y); c.quadraticCurveTo(x, y - r * 0.9, x + r, y); c.quadraticCurveTo(x, y + r * 0.9, x - r, y); c.stroke();
+    c.fillStyle = P.steel;
+    c.beginPath(); c.arc(x, y, r * 0.35, 0, Math.PI * 2); c.fill();
+  }
+
   function rr(c, x, y, w, h, r) {
     c.beginPath();
     c.moveTo(x + r, y);
@@ -696,9 +707,24 @@
     heroGlyph(c, { cls: h.cls, tier: h.tier, title: h.title }, size * 0.95);
   };
 
-  // rank letter and level pips on a placed piece
+  // rank letter and level pips on a placed piece, drawn once per size and reused as an image
+  const badgeCache = new Map();
   function badge(c, cx, cy, T, tier, lv) {
     if (T < 20) return;
+    const key = `${tier}|${lv}|${T}|${V.dpr}`;
+    let img = badgeCache.get(key);
+    if (!img) {
+      if (badgeCache.size > 400) badgeCache.clear();
+      img = document.createElement('canvas');
+      img.width = img.height = Math.ceil(T * V.dpr);
+      const b = img.getContext('2d');
+      b.scale(V.dpr, V.dpr);
+      drawBadge(b, T / 2, T / 2, T, tier, lv);
+      badgeCache.set(key, img);
+    }
+    c.drawImage(img, cx - T / 2, cy - T / 2, T, T);
+  }
+  function drawBadge(c, cx, cy, T, tier, lv) {
     const L = RD.TIERS[tier];
     const fs = Math.max(8, Math.round(T * 0.24));
     c.font = `600 ${fs}px "DM Mono", monospace`;
@@ -948,6 +974,36 @@
       c.beginPath(); c.arc(cx, cy, T * 1.6, 0, Math.PI * 2); c.stroke();
       c.setLineDash([]);
     }
+
+    // what the party already knows: an eye on every hidden trap in their shared map
+    if (R && G.phase === 'raid') {
+      const K = R.shared;
+      for (const [t, v] of K.traps) {
+        if (!on(t) || v.off) continue;
+        const [cx, cy] = tc(t);
+        eye(c, cx - T * 0.3, cy - T * 0.3, T * 0.13);
+      }
+    }
+
+    // speech bubbles
+    c.font = `600 ${Math.max(10, Math.round(T * 0.3))}px "Alegreya Sans", sans-serif`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    for (const b of RD.FX.bubbles) {
+      const h = b.h;
+      if (!RD.heroAlive(h) || !on(h.tile)) continue;
+      const a = Math.min(1, b.t / 0.12, (b.life - b.t) / 0.4);
+      const w = c.measureText(b.text).width + T * 0.3, hh = T * 0.42;
+      const x = Math.max(w / 2, Math.min(COLS * T - w / 2, h.x * T)), y = h.y * T - T * 0.85;
+      c.globalAlpha = a;
+      c.fillStyle = 'rgba(233,224,210,0.95)';
+      rr(c, x - w / 2, y - hh / 2, w, hh, hh * 0.35);
+      c.fill();
+      c.beginPath(); c.moveTo(h.x * T - T * 0.08, y + hh / 2 - 1); c.lineTo(h.x * T, y + hh / 2 + T * 0.12); c.lineTo(h.x * T + T * 0.08, y + hh / 2 - 1); c.fill();
+      c.fillStyle = '#17121a';
+      c.fillText(b.text, x, y + 0.5);
+    }
+    c.globalAlpha = 1;
 
     c.textAlign = 'center';
     c.textBaseline = 'middle';

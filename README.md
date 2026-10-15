@@ -10,6 +10,14 @@ There is no build step and no outside requests: the fonts ship in `fonts/` (SIL 
 
 New players get a one-click start on Apprentice and a guided first night (place a trap, place a monster, open the gate). The game fills one fixed screen at any landscape size; below 1150 px wide the Guild Ledger becomes a drawer, and portrait phones are asked to turn sideways.
 
+## Modes, trophies and pacts
+
+- **Campaign** is the full climb: hold 20–30 nights depending on difficulty.
+- **Quick** is 12 nights in which everything (ranks, floors, guild strength, income) moves 2.2× faster, so a 15–25 minute run still reaches bosses and the Demon Lord.
+- **Daily dungeon** uses Quick rules on Keeper with a seed taken from today's date, so everyone gets the same dungeon. Your best score for each day is kept.
+- Every run ends with a **score** (nights held, heroes slain, legends, and a bonus for winning), and the best is kept per mode and difficulty.
+- **18 trophies** carry across every dungeon. Seven of them unlock a **Dark Pact**, a perk you can take into a new run: more starting malice or gold, cheaper monsters or bosses, tougher doors and faster traps, four nightly deals, or fewer Sending Stones.
+
 ## How a night works
 
 1. **Build.** Everything you have unlocked is always in the catalogue, and three random pieces are 30% off each night. Moving a piece is free, even between floors. Dig or fill corridors, or haul the hoard somewhere new. **Level up** a placed piece (Lv1–5): each level adds 15% to damage and health, 15% to how long it pins, dazes, slows or stuns, and makes traps rearm 6% faster. Hover any piece to see its numbers, and with the Level tool, the before and after.
@@ -57,13 +65,14 @@ Balance was tuned with headless bot games. A bot that builds kill zones, re-trap
 |---|---|
 | Click map | Use the selected blueprint or tool |
 | Tap map (touch) | First tap shows what would happen; tap the same tile again to do it |
+| `+` / `−`, pinch, `Ctrl`+wheel | Zoom the map; drag or scroll to look around when zoomed. During raids the view follows the heroes |
 | Right-click / `Esc` / **Cancel** | Cancel a move or a power |
 | `Space` | Open the gate (build), pause/resume (raid) |
 | `G` | Toggle the guild's map |
 | `[` `]` | Previous / next floor |
 | `1` `2` `4` | Raid speed |
 
-During a raid, **Tremor** knocks down heroes around a tile, and **Douse** snuffs every torch so heroes can't spot traps.
+During a raid, **Tremor** knocks down heroes around a tile, and **Douse** snuffs every torch so heroes can't spot traps. Heroes call out what is happening in speech bubbles, and a small eye marks every trap the party already knows about.
 
 ## Web portals
 
@@ -100,3 +109,4 @@ The game saves itself (in the portal's data module when there is one, else `loca
 | `js/portal.js` | Web portal adapter (CrazyGames SDK v3): gameplay events, ads, cloud saves |
 | `js/ui.js` | DOM panels, floor tabs, stat panel, tutorial, modals, input, portal hooks and the frame loop |
 | `fonts/` | Bundled Jacquard 24, Alegreya Sans and DM Mono (latin subset) with their licenses |
+| `tools/` | Headless tools, not part of the game upload: `node tools/check.js` runs regression checks, `node tools/balance.js <difficulty> <games> <nights> <mode>` lets a competent bot play to measure difficulty |

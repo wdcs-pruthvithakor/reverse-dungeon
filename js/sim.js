@@ -7,7 +7,7 @@
 
   // ---------------------------------------------------------------- visual effects (read by render.js)
   // Every effect remembers its floor so the map only draws what happens on the floor you are looking at.
-  const FX = (RD.FX = { floaters: [], parts: [], shots: [], rings: [], shake: 0 });
+  const FX = (RD.FX = { floaters: [], parts: [], shots: [], rings: [], bubbles: [], shake: 0 });
   let fxFloor = 0;
   RD.floater = (x, y, text, color, big, f) => FX.floaters.push({ x, y, text, color, t: 0, life: big ? 1.6 : 1.1, big, f: f == null ? fxFloor : f });
   RD.burst = (x, y, color, n, spd, f) => {
@@ -17,12 +17,19 @@
     }
   };
   RD.ring = (x, y, r, color, f) => FX.rings.push({ x, y, r, color, t: 0, life: 0.5, f: f == null ? fxFloor : f });
+  // a few words over a hero's head, so the story of a raid is on the map and not only in the log
+  RD.say = (h, text) => {
+    FX.bubbles = FX.bubbles.filter((b) => b.h !== h);
+    FX.bubbles.push({ h, text, t: 0, life: 2.4 });
+  };
   const shot = (a, b, color, life) => FX.shots.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, t: 0, life: life || 0.16, color, f: fl(a.tile) });
   RD.fxUpdate = function (dt) {
     for (const f of FX.floaters) { f.t += dt; f.y -= dt * 0.7; }
     for (const p of FX.parts) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; }
     for (const s of FX.shots) s.t += dt;
     for (const r of FX.rings) r.t += dt;
+    for (const b of FX.bubbles) b.t += dt;
+    FX.bubbles = FX.bubbles.filter((b) => b.t < b.life);
     FX.floaters = FX.floaters.filter((f) => f.t < f.life);
     FX.parts = FX.parts.filter((p) => p.t < p.life);
     FX.shots = FX.shots.filter((s) => s.t < s.life);
@@ -98,6 +105,7 @@
     h.K.hz = null;
     if (R.t - (h.said || 0) > 2) {
       h.said = R.t;
+      RD.say(h, `The ${what} is gone!`);
       log(R, `${h.name}: “The ${what} at ${RD.coord(tile)} is gone.”`, 'hero');
     }
   }
@@ -126,6 +134,7 @@
         if (down != null && fl(down) > f && !K.stairs.has(j)) {
           K.stairs.add(j);
           K.hz = null;
+          RD.say(h, 'Stairs down!');
           log(R, `${h.name} finds stairs leading down at ${RD.coord(j)}.`, 'warn');
         }
         const it = G.items.get(j);
@@ -136,6 +145,7 @@
         if (d && d.kind === 'monster' && it.type !== 'mimic') {
           if (K.lairs.get(j) !== it.type) {
             RD.learnItem(K, it);
+            if (d.boss) RD.say(h, d.lord ? 'The Demon Lord!' : `A ${d.name.toLowerCase()}!`);
             if (d.boss) log(R, `${h.name} sees the ${d.name} at ${RD.coord(j)}${d.myth ? '. A myth made flesh.' : '.'}`, 'warn');
           }
         } else if (K.lairs.has(j) && !(it && it.type === 'mimic')) { const w = RD.WHAT[K.lairs.get(j)]; K.lairs.delete(j); shift(R, h, 'lair:' + j, w, j); }
@@ -182,6 +192,7 @@
             h.K.removed.delete('trap:' + j);
             h.K.hz = null;
             RD.floater(cx, cy, 'spotted', '#9cc0e6', false, f);
+            RD.say(h, 'A trap!');
             sfx('spot');
             log(R, `${h.name} spots a ${d.name.toLowerCase()} at ${RD.coord(j)}.`, 'hero');
           }
@@ -289,6 +300,7 @@
       goal = chooseGoal(G, R, h, dist, true);
       if (goal >= 0 && dist[goal] < Infinity && !h.probing) {
         h.probing = true;
+        RD.say(h, 'The walls moved!');
         log(R, `${h.name}: “The walls have moved. There must be another way.”`, 'hero');
       }
     }
@@ -358,7 +370,7 @@
     const ash = omen(G, 'ash') ? 0.5 : 1;
     const dmg = d.dmg != null ? RD.scaled(it.type, 'dmg', it.lv) : 0;
     const where = RD.coord(it.tile);
-    if (d.rearm) it.cd = RD.lvRearm(d, it.lv) * ash;
+    if (d.rearm) it.cd = RD.lvRearm(d, it.lv) * ash * (G.pact === 'iron' ? 0.85 : 1);
     sfx({ spikes: 'trap', snare: 'trap', rune: 'fire', chasm: 'crush', crusher: 'crush', vent: 'hiss', maze: 'daze', frost: 'frost', siphon: 'daze', abyss: 'summon' }[it.type]);
     switch (it.type) {
       case 'spikes':
@@ -454,6 +466,7 @@
       h.hp = h.maxHp * 0.5;
       RD.ring(h.x, h.y, 1, '#f0d9a0', fl(h.tile));
       log(R, `${label(saint)} raises ${h.name} from the floor.`, 'hero');
+      RD.say(saint, 'Rise!');
       return;
     }
     h.state = 'dead';
@@ -556,19 +569,21 @@
       h.state = 'flee';
       h.next = -1;
       h.doorAt = h.disarmAt = -1;
+      RD.say(h, h.carry ? 'Run, with the gold!' : 'Run!');
       log(R, `${h.name} turns and runs for the gate.`, 'hero');
     }
 
     if (h.state === 'loot') {
       h.lootT -= dt;
       if (h.lootT <= 0) {
-        const want = Math.round((5 + h.greed * 6 + 0.4 * Math.min(G.raid, 40)) * (1 + 0.15 * h.tier) * RD.BAL.theft);
+        const want = Math.round((5 + h.greed * 6 + 0.4 * Math.min(RD.age(G), 40)) * (1 + 0.15 * h.tier) * RD.BAL.theft);
         const take = Math.min(G.gold, want);
         G.gold -= take;
         h.carry += take;
         R.goldTaken += take;
         h.state = 'escape';
         h.xp += 4;
+        RD.say(h, 'Gold!');
         sfx('loot');
         RD.floater(h.x, h.y - 0.5, '−' + take + ' gold', '#e3b04b', true, fl(h.tile));
         log(R, `${h.name} fills a sack with ${take} gold.`, 'warn');
@@ -689,6 +704,7 @@
       near.K.lairs.set(m.home, 'mimic');
       near.K.hz = null;
       RD.floater(m.x, m.y - 0.5, 'MIMIC', '#e05a86', true, fl(m.tile));
+      RD.say(near, 'It bites!');
       log(R, `The chest at ${RD.coord(m.home)} opens its mouth.`, 'hit');
     }
     if (d.regen && m.hp < m.maxHp) m.hp = Math.min(m.maxHp, m.hp + m.maxHp * d.regen * dt);
@@ -896,7 +912,7 @@
     return out;
   };
 
-  const brief = (h) => ({ name: h.name, title: h.title, cls: h.cls, tier: h.tier, carry: h.carry || 0, growth: h.growth || '' });
+  const brief = (h) => ({ name: h.name, title: h.title, cls: h.cls, tier: h.tier, carry: h.carry || 0, growth: h.growth || '', team: !!h.team });
 
   function endRaid(G, R) {
     G.phase = 'debrief';
@@ -946,11 +962,11 @@
     gu.blackout = (R.reporters || []).length ? 0 : gu.blackout + 1;
     // Renown: once the ranks run out, every night the guild fails to take gold it trains and equips harder.
     // A dungeon that holds easily keeps facing stronger heroes until something gives.
-    if (G.raid >= 15) {
+    if (RD.age(G) >= 15) {
       if (R.goldTaken - R.goldBack <= 0) gu.renown = (gu.renown || 0) + 0.05 * D.drift;
       else gu.renown = Math.max(0, (gu.renown || 0) - 0.02);
     }
-    const income = Math.round((26 + 4 * Math.min(G.raid, 40)) * D.income * (1 + 0.25 * RD.unlocked(G)));
+    const income = Math.round((26 + 4 * Math.min(RD.age(G), 40)) * D.income * RD.modeOf(G).income * (1 + 0.25 * RD.unlocked(G)));
     G.malice += income;
     const lost = R.goldTaken - R.goldBack;
     G.stats.goldLost += Math.max(0, lost);

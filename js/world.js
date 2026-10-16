@@ -275,9 +275,16 @@
   // How dangerous each tile looks to the guild: turret lanes and monster posts, weighted by rank.
   RD.hazard = function (K) {
     const hz = new Float32Array(NN);
+    let open = null; // what the guild believes is passable, built once for line-of-sight checks
     for (const [t, type] of K.turrets) {
       const [x0, y0] = xy(t), f = fl(t);
       const d = RD.ITEMS[type];
+      if (d.chain) {
+        // chain lightning reaches every open tile it can see within range
+        if (!open) open = K.tiles.map((v) => (v === 0 ? 0 : 1));
+        for (let j = f * N; j < (f + 1) * N; j++) if (K.tiles[j] !== 0 && RD.tdist(t, j) <= d.range + 0.5 && RD.los(open, t, j)) hz[j] += 1.5 + 0.6 * d.tier;
+        continue;
+      }
       for (const [dx, dy] of DIRS) {
         for (let s = 1; s <= d.range; s++) {
           const x = x0 + dx * s, y = y0 + dy * s;
@@ -327,7 +334,10 @@
     if (t > RD.MAX_TIER) return null;
     return { tier: t, night: RD.realNight(G, RD.TIER_UNLOCK[t]), items: Object.keys(RD.ITEMS).filter((k) => RD.ITEMS[k].tier === t && !RD.ITEMS[k].summonOnly) };
   };
-  RD.floorNight = (G, f) => RD.realNight(G, RD.FLOOR_UNLOCK[f]);
+  // the real night floor f can be dug; floors past the fifth come every DEEP_EVERY nights, at least 20 nights apart
+  RD.floorNight = (G, f) => f < RD.BASE_FLOORS ? RD.realNight(G, RD.FLOOR_UNLOCK[f]) : Math.max(RD.DEEP_EVERY * (f - RD.BASE_FLOORS + 1), RD.floorNight(G, f - 1) + 20);
+  RD.deepAllowed = (G) => !!(G.endless || RD.modeOf(G).deep);
+  RD.maxFloors = (G) => (RD.deepAllowed(G) ? RD.MAX_FLOORS : RD.BASE_FLOORS);
   RD.winAt = (G) => RD.modeOf(G).win || RD.DIFF[G.diff].win;
 
   // ---------------------------------------------------------------- the guild's rating of your dungeon
@@ -371,7 +381,7 @@
     tiles.set(map.tiles, 0);
     const G = {
       seed, rng, diff, mode, pact: pact || null, twists: (opts.twists || []).filter((k) => RD.TWISTS[k]), heart: opts.heart || {},
-      floors: 1, tiles, gates: [map.entrance], stairs: [], links: new Map(),
+      floors: 1, tiles, gates: [map.entrance], stairs: [], links: new Map(), themes: ['halls'],
       entrance: map.entrance, hoard: map.hoard,
       items: new Map(),
       malice: D.malice, gold: D.gold, raid: 1, phase: 'build', endless: false,
@@ -406,6 +416,26 @@
   RD.isStairs = (G, g) => G.links.has(g);
   RD.isGate = (G, g) => g === G.entrance || (fl(g) > 0 && G.gates[fl(g)] === g % N);
 
+  // ---------------------------------------------------------------- floor themes and room auras
+  RD.themeOf = (G, g) => RD.THEMES[(G.themes && G.themes[fl(g)]) || 'halls'];
+  // the bonus a floor's theme gives a piece standing on it, for one stat
+  RD.themeMult = (G, type, g, stat) => {
+    const th = RD.themeOf(G, g);
+    if (!th || th[stat] == null) return 1;
+    if (stat === 'hold' || stat === 'heroSlow' || stat === 'gold') return th[stat];
+    return th.tag && RD.hasTag(type, th.tag) ? th[stat] : 1;
+  };
+  // is a piece inside the reach of a War Banner or Trapmaster's Sigil?
+  RD.inAura = (G, g, aura) => {
+    for (const it of G.items.values()) { const d = RD.ITEMS[it.type]; if (d.aura === aura && RD.tdist(it.tile, g) <= d.auraR) return true; }
+    return false;
+  };
+  // three themes to choose from for the next floor, seeded by the run
+  RD.themeChoices = (G) => {
+    const rng = RD.makeRng(G.seed * 31 + G.floors * 7 + G.raid);
+    return rng.shuffle(Object.keys(RD.THEMES).filter((k) => k !== 'halls')).slice(0, 3);
+  };
+
   // ---------------------------------------------------------------- save / load
   // Only build-phase state is saved. `pending` marks a save taken at dawn, before the next night was rolled.
   const packKnow = (K, M) => ({
@@ -427,9 +457,9 @@
     return {
       v: 2, pending: !!pending, diff: G.diff, mode: G.mode, pact: G.pact, adReroll: G.adReroll, twists: G.twists, heart: G.heart, daily: G.daily,
       seed: G.seed, rng: G.rng.state(),
-      floors: G.floors, tiles: Array.from(G.tiles.subarray(0, M)), gates: G.gates, stairs: G.stairs,
+      floors: G.floors, tiles: Array.from(G.tiles.subarray(0, M)), gates: G.gates, stairs: G.stairs, themes: G.themes,
       entrance: G.entrance, hoard: G.hoard,
-      items: [...G.items.values()].map((it) => ({ type: it.type, tile: it.tile, lv: it.lv || 1, paid: it.paid || 0 })),
+      items: [...G.items.values()].map((it) => ({ type: it.type, tile: it.tile, lv: it.lv || 1, paid: it.paid || 0, price: it.price })),
       malice: G.malice, gold: G.gold, raid: G.raid, endless: G.endless,
       guild: { K: packKnow(g.K, M), causes: g.causes, pressure: g.pressure, threat: g.threat, wariness: g.wariness, blackout: g.blackout || 0, renown: g.renown || 0, veterans: g.veterans, rumors: g.rumors },
       party: pending ? [] : G.party, omen: G.omen && G.omen.id, offers: G.offers, sale: G.sale, adapt: G.adapt,
@@ -445,7 +475,8 @@
     const items = new Map();
     for (const s of o.items) {
       if (!RD.ITEMS[s.type]) continue;
-      const it = { type: s.type, tile: s.tile, lv: Math.min(RD.MAX_LEVEL, s.lv || s.rank || 1), paid: s.paid || 0 };
+      // saves from before prices were recorded fall back to the list price
+      const it = { type: s.type, tile: s.tile, lv: Math.min(RD.MAX_LEVEL, s.lv || s.rank || 1), paid: s.paid || 0, price: s.price != null ? s.price : RD.ITEMS[s.type].cost };
       freshItem(it);
       items.set(it.tile, it);
     }
@@ -454,6 +485,7 @@
     const G = {
       seed: o.seed, rng, diff: RD.DIFF[o.diff] ? o.diff : 'normal', mode: RD.MODES[o.mode] ? o.mode : 'campaign', pact: o.pact || null, adReroll: o.adReroll, twists: o.twists || [], heart: o.heart || {}, daily: o.daily,
       floors: o.floors || 1, tiles, gates: o.gates || [o.entrance], stairs: o.stairs || [], links: new Map(),
+      themes: (o.themes || []).concat(new Array(o.floors || 1).fill('halls')).slice(0, o.floors || 1),
       entrance: o.entrance, hoard: o.hoard,
       items, malice: o.malice, gold: o.gold, raid: o.raid, phase: 'build', endless: o.endless,
       guild: { pressure: 0, threat: 0, wariness: 0, blackout: 0, renown: 0, ...o.guild, K: unpackKnow(o.guild.K) },
@@ -473,6 +505,7 @@
     it.cd = 0;
     it.spent = false;
     it.off = false;
+    it.jamT = 0;
     if (d.kind === 'door') { it.hp = RD.scaled(it.type, 'hp', it.lv) * (RD.G && RD.G.pact === 'iron' ? 1.5 : 1); it.pick = 0; it.broken = false; }
   }
 
@@ -551,8 +584,8 @@
   RD.canOpenFloor = function (G) {
     if (G.phase !== 'build') return 'Only between raids.';
     if (G.floors >= MAX_FLOORS) return 'The dungeon is as deep as it goes.';
-    const night = RD.FLOOR_UNLOCK[G.floors];
-    if (RD.age(G) < night) return `Floor ${RD.ROMAN[G.floors]} can be dug from night ${RD.floorNight(G, G.floors)}.`;
+    if (G.floors >= RD.maxFloors(G)) return `Floors below ${RD.ROMAN[G.floors - 1]} open in endless mode, from night ${RD.floorNight(G, G.floors)}.`;
+    if (G.raid < RD.floorNight(G, G.floors)) return `Floor ${RD.ROMAN[G.floors]} can be dug from night ${RD.floorNight(G, G.floors)}.`;
     const c = RD.floorCost(G);
     if (G.malice < c) return `Needs ${c} malice. You have ${G.malice}.`;
     return null;
@@ -560,7 +593,7 @@
 
   // Dig a new floor below the deepest one. The stairs go at the far end of the floor above,
   // and the hoard is carried down to the new floor for free.
-  RD.openFloor = function (G) {
+  RD.openFloor = function (G, theme) {
     const err = RD.canOpenFloor(G);
     if (err) return { err };
     const f = G.floors;
@@ -581,6 +614,8 @@
     G.malice -= RD.floorCost(G);
     G.stairs[above] = best % N;
     G.gates[f] = map.entrance;
+    G.themes = G.themes || ['halls'];
+    G.themes[f] = RD.THEMES[theme] ? theme : 'halls';
     G.floors++;
     linkFloors(G);
     G.hoard = f * N + map.hoard;
@@ -633,6 +668,11 @@
     const d = RD.ITEMS[type];
     if (tool !== 'move' && d.tier > RD.unlocked(G)) return `${RD.TIERS[d.tier]}-rank pieces unlock on night ${RD.TIER_UNLOCK[d.tier]}.`;
     if (it && i !== from) return 'Something already stands here.';
+    if (d.kind === 'seal') {
+      const boss = [...G.items.values()].some((o) => RD.ITEMS[o.type].boss && fl(o.tile) === fl(i));
+      if (!boss) return 'A boss seal needs a boss on the same floor.';
+      for (const o of G.items.values()) if (o.tile !== from && o.type === 'seal' && fl(o.tile) === fl(i)) return `Floor ${RD.ROMAN[fl(i)]} already has a boss seal.`;
+    }
     if (d.boss) {
       for (const o of G.items.values()) {
         if (o.tile === from || !RD.ITEMS[o.type].boss) continue;
@@ -640,6 +680,9 @@
         if (fl(o.tile) === fl(i)) return `Floor ${RD.ROMAN[fl(i)]} already has a boss (${RD.ITEMS[o.type].name}).`;
       }
     }
+    // storm fields interfere: pylons need room between them
+    const gap = RD.RULES.pylonSpacing && RD.GAP[type];
+    if (gap) for (const o of G.items.values()) if (o.tile !== from && o.type === type && RD.tdist(o.tile, i) < gap) return type === 'pylon' ? `Storm pylons interfere within ${gap} tiles of each other (one stands at ${RD.coord(o.tile)}).` : `${d.name}s need ${gap} tiles between them (one is at ${RD.coord(o.tile)}).`;
     if (d.place === 'wall') {
       if (floor) return `${d.name}s go into rock beside a corridor.`;
       if (!RD.nb(i).some((j) => G.tiles[j] === 1 && !RD.isGate(G, j))) return 'There is no corridor beside this rock.';
@@ -657,6 +700,10 @@
     return G.malice >= c ? null : `Needs ${c} malice. You have ${G.malice}.`;
   }
 
+  // Selling returns 60% of what was actually spent: the price paid at placement (after any deal,
+  // pact or twist discount) plus every level-up. Never the full list price, or discounts would mint malice.
+  RD.refund = (it) => Math.round(((it.price != null ? it.price : RD.ITEMS[it.type].cost) + (it.paid || 0)) * 0.6);
+
   RD.apply = function (G, tool, i, from) {
     const err = RD.check(G, tool, i, from);
     if (err) return { err };
@@ -664,8 +711,12 @@
     if (tool === 'fill') { G.tiles[i] = 0; G.malice -= RD.costOf(G, 'fill'); return { spent: RD.costOf(G, 'fill'), map: true }; }
     if (tool === 'sell') {
       const it = G.items.get(i);
-      const back = Math.round((RD.ITEMS[it.type].cost + (it.paid || 0)) * 0.6);
+      let back = RD.refund(it);
       G.items.delete(i);
+      // a seal cannot outlive the last boss on its floor
+      if (RD.ITEMS[it.type].boss && ![...G.items.values()].some((o) => RD.ITEMS[o.type].boss && fl(o.tile) === fl(i))) {
+        for (const o of [...G.items.values()]) if (o.type === 'seal' && fl(o.tile) === fl(i)) { back += RD.refund(o); G.items.delete(o.tile); }
+      }
       G.malice += back;
       return { gained: back };
     }
@@ -687,7 +738,7 @@
       return { moved: true };
     }
     const cost = RD.costOf(G, tool);
-    const it = { type: tool, tile: i, lv: 1, paid: 0 };
+    const it = { type: tool, tile: i, lv: 1, paid: 0, price: cost };
     freshItem(it);
     G.items.set(i, it);
     G.malice -= cost;
@@ -695,18 +746,19 @@
   };
 
   // Every number a piece will fight with, for the detail panel.
-  RD.pieceStats = function (type, lv) {
+  // `tier` overrides the blueprint's rank: summons and horde packs fight above their own
+  RD.pieceStats = function (type, lv, tier) {
     const d = RD.ITEMS[type];
-    const s = (k) => Math.round(RD.scaled(type, k, lv));
+    const s = (k) => Math.round(RD.scaled(type, k, lv, tier));
     const rows = [];
     if (d.hp != null) rows.push(['Health', s('hp')]);
     if (d.dmg != null) rows.push([d.kind === 'monster' ? 'Hit' : 'Damage', s('dmg')]);
     if (d.rate) rows.push(['Attacks', 'every ' + d.rate + 's']);
-    if (d.dmg != null && d.rate) rows.push(['Damage / s', Math.round(RD.scaled(type, 'dmg', lv) / d.rate)]);
+    if (d.dmg != null && d.rate) rows.push(['Damage / s', Math.round(RD.scaled(type, 'dmg', lv, tier) / d.rate)]);
     if (d.dps) rows.push(['Poison / s', s('dps')]);
     if (d.breath) rows.push([d.lord ? 'Hellfire' : 'Breath', `${s('breath')} every ${d.every}s`]);
     if (d.quake) rows.push(['Quake', `${s('quake')} + knockdown every ${d.every}s`]);
-    if (d.pct) rows.push(['Drains', Math.round(d.pct * 100) + '% of health']);
+    if (d.pct) rows.push(['Drains', Math.round(d.pct * 100) + '% of current health; again once healed above ' + Math.round(RD.SOUL_MEND * 100) + '%']);
     if (d.regen) rows.push(['Regrows', (d.regen * 100).toFixed(1) + '% / s']);
     if (d.summon) rows.push(['Summons', `${RD.ITEMS[d.summon].name} every ${d.every || 5}s (max ${d.max})`]);
     if (d.heads) rows.push(['Bites', `${d.heads} heroes at once`]);
@@ -719,6 +771,17 @@
     if (d.stun) rows.push(['Stuns', sec(RD.lvDur(d, 'stun', lv))]);
     if (d.confuse) rows.push(['Dazes', sec(RD.lvDur(d, 'confuse', lv))]);
     if (d.rearm) rows.push(['Rearms', sec(RD.lvRearm(d, lv))]);
+    if (d.dur && d.dps && d.kind === 'trap' && d.radius == null) rows.push(['Poison for', d.dur + 's']);
+    if (d.call) rows.push(['Calls monsters', `within ${d.call} tiles`]);
+    if (d.cage) rows.push(['Cages', sec(RD.lvDur(d, 'cage', lv))]);
+    if (d.line) rows.push(['Rolls', d.line + ' tiles']);
+    if (d.den) rows.push(['Horde', `${d.count} × ${RD.ITEMS[d.pack].name}, fighting at ${RD.TIERS[Math.max(d.tier, RD.ITEMS[d.pack].tier)]}`]);
+    if (d.statue) rows.push(['Disguise', 'a statue until a hero is adjacent']);
+    if (d.armor) rows.push(['Stone skin', `${Math.round(d.armor * 100)}% less from range`]);
+    if (d.charge) rows.push(['Charge', `knocks down for ${d.charge}s`]);
+    if (d.petrify) rows.push(['Petrify', `${Math.round(d.petrify * 100)}% a bite`]);
+    if (d.fear) rows.push(['Terror', `${d.fear}s of panic`]);
+    if (d.aura) rows.push(['Room', `${d.aura === 'monster' ? 'monsters' : 'traps'} within ${d.auraR} tiles`]);
     return rows;
   };
 
@@ -885,10 +948,18 @@
       if (w.berserker) w.berserker += c.monster * 0.2;
       w.cleric += c.monster * 0.3;
       w.scout += (1 - RD.coverage(G, K)) * 2 + (gu.wariness || 0) * 2;
+      if (w.tamer) w.tamer += c.monster * 0.2;
+      if (w.ninja) w.ninja += c.trap * 0.2;
+      if (G.themes && G.themes.includes('crypt')) w.cleric += 1;
       let cls = rng.weighted(w);
       if (!legend && (RD.twisted(G, 'legends') || rng.chance(0.045 * D.rare * (1 + 0.2 * t)))) {
         const pool = {};
         for (const u of RD.UNIQUE) if (u !== 'chosen' && canBe(u, t)) pool[u] = RD.CLASSES[u].w;
+        // the guild sends the right specialist when it knows what it is facing
+        const known = [...K.lairs.values()];
+        if (pool.goblinslayer && known.filter((ty) => RD.hasTag(ty, 'goblinoid')).length >= 3) pool.goblinslayer *= 4;
+        if (pool.phantomthief && [...G.items.values()].some((it) => it.type === 'seal') && K.lairs.size) pool.phantomthief *= 3;
+        if (pool.shieldhero && known.filter((ty) => RD.ITEMS[ty].elite).length >= 2) pool.shieldhero *= 3;
         if (Object.keys(pool).length) cls = rng.weighted(pool);
       }
       hire(cls, t);

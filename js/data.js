@@ -61,10 +61,13 @@
   RD.MAX_TIER = 9;
 
   // Floors open as the dungeon survives. Each one is a fresh level below the last.
-  RD.MAX_FLOORS = 5;
+  // Five floors in a normal run; endless and Saga runs keep digging, one floor every 50 nights (VI on night 50, VII on 100…).
+  RD.BASE_FLOORS = 5;
+  RD.MAX_FLOORS = 10;
+  RD.DEEP_EVERY = 50;
   RD.FLOOR_UNLOCK = [1, 4, 9, 14, 19];
-  RD.FLOOR_COST = [0, 40, 110, 240, 420];
-  RD.ROMAN = ['I', 'II', 'III', 'IV', 'V'];
+  RD.FLOOR_COST = [0, 40, 110, 240, 420, 650, 900, 1200, 1550, 1950];
+  RD.ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 
   // Levels raise a piece within its rank. Lv5 is about one rank higher. Every level adds 15% to damage,
   // health and how long a trap holds a hero (pin, confuse, slow, stun), and cuts rearm time by 6%.
@@ -87,6 +90,7 @@
   // guild strength and income, so a 12-night run still climbs from F to the Demon Lord.
   RD.MODES = {
     campaign: { name: 'Campaign', blurb: 'The full climb. Hold the nights your difficulty asks.', pace: 1, income: 1 },
+    saga: { name: 'Saga', blurb: '100 nights. Ranks open about four times slower, so every piece earns its keep for longer and each rank of hero is a real fight. Deeper floors past V.', pace: 0.26, income: 0.28, purse: 0.2, bounty: 0.45, win: 100, deep: true },
     quick: { name: 'Quick', blurb: '12 nights, every rank unlocks about twice as fast. 15 to 25 minutes.', pace: 2.2, income: 2.5, win: 12 },
     daily: { name: 'Daily dungeon', blurb: 'Today’s seed, the same for everyone. Quick rules on Keeper. One best score per day.', pace: 2.2, income: 2.5, win: 12, diff: 'normal' },
   };
@@ -169,26 +173,26 @@
     snare: { name: 'Bear Trap', tier: 1, cost: 22, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dmg: 16, root: 3, rearm: 5,
       desc: 'Iron jaws. Pins the hero in place for 3s so your monsters can catch up.' },
     maze: { name: 'Wandering Rune', tier: 1, cost: 26, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'illusion', dmg: 8, confuse: 5, rearm: 6,
-      desc: 'Hidden glyph. The hero who steps on it wanders aimlessly for 5s. Levels make the daze last longer.' },
+      desc: 'Hidden glyph. The hero who steps on it wanders aimlessly for 5s. Levels make the daze last longer. A hero who has just recovered keeps their head for 8s.' },
     vent: { name: 'Miasma Vent', tier: 2, cost: 36, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dps: 6, dur: 4, radius: 1.5, rearm: 8,
       desc: 'Hidden grate. Fills a 3×3 area with bad air for 4s.' },
     rune: { name: 'Fire Rune', tier: 2, cost: 40, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'trap', dmg: 22, radius: 1.5, oneShot: true,
       desc: 'Hidden glyph. Burns every hero within one tile. Spent after one blast per raid.' },
-    chasm: { name: 'False Floor', tier: 3, cost: 58, kind: 'trap', place: 'floor', hidden: true, sense: 'illusion', cat: 'illusion', dmg: 30, stun: 2.2, rearm: 4,
+    chasm: { name: 'False Floor', tier: 3, cost: 72, kind: 'trap', place: 'floor', hidden: true, sense: 'illusion', cat: 'illusion', dmg: 30, stun: 2.2, rearm: 4,
       desc: 'An illusion laid over a drop. Heavy damage and a long climb out. Mages see through it.' },
     crusher: { name: 'Crusher', tier: 3, cost: 62, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dmg: 46, rearm: 10,
       desc: 'A ceiling block on a hair trigger. Enormous damage, slow to winch back up.' },
     frost: { name: 'Frost Sigil', tier: 4, cost: 96, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'trap', dmg: 12, radius: 1.5, slow: 5, rearm: 7,
       desc: 'Hidden glyph. Freezes every hero within one tile to half speed for 5s.' },
     siphon: { name: 'Soul Siphon', tier: 6, cost: 250, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'trap', dmg: 8, pct: 0.3, rearm: 9,
-      desc: 'Tears away 30% of the victim’s health, however strong they are.' },
+      desc: 'Tears away 30% of the victim’s remaining health, however strong they are. A torn soul only tears again once the hero is healed back above 80% of their health; until then siphons do their flat damage.' },
     abyss: { name: 'Abyss Gate', tier: 7, cost: 400, kind: 'trap', place: 'floor', hidden: true, sense: 'illusion', cat: 'illusion', dmg: 14, rearm: 12,
       desc: 'An illusion of open floor. Whoever steps through is thrown back out of the front gate.' },
     // wall pieces
     darts: { name: 'Dart Slit', tier: 0, cost: 24, kind: 'turret', place: 'wall', cat: 'turret', dmg: 9, rate: 1.1, range: 4,
-      desc: 'Set into rock beside a corridor. Shoots down straight passages up to 4 tiles away.' },
-    pylon: { name: 'Storm Pylon', tier: 5, cost: 160, kind: 'turret', place: 'wall', cat: 'turret', dmg: 12, rate: 1.6, range: 3, chain: 3,
-      desc: 'Set into rock. Lightning leaps between up to 3 heroes within 3 tiles.' },
+      desc: 'Set into rock beside a corridor. Shoots down straight passages up to 4 tiles away. No two side by side. Rogues who have felt it can jam it for 12s.' },
+    pylon: { name: 'Storm Pylon', tier: 5, cost: 190, kind: 'turret', place: 'wall', cat: 'turret', dmg: 12, rate: 1.6, range: 3, chain: 3,
+      desc: 'Set into rock. Lightning leaps between up to 3 heroes within 3 tiles it can see. Rogues who have felt it can jam it for 12s. Pylons need 4 tiles between them.' },
     // obstacles
     door: { name: 'Iron Door', tier: 0, cost: 16, kind: 'door', place: 'floor', hp: 110,
       desc: 'Holds a corridor shut until broken. Knights batter it fast, rogues pick the lock.' },
@@ -229,11 +233,93 @@
     demonlord: { name: 'Demon Lord', tier: 9, cost: 3400, kind: 'monster', boss: true, myth: true, lord: true, place: 'floor', cat: 'monster', hp: 1800, dmg: 54, rate: 1.3, speed: 1.6, leash: 4,
       breath: 60, breathR: 2.2, every: 5, summon: 'imp', max: 4, regen: 0.01,
       desc: 'The end of all dungeons. Hellfire, a court of imps, and wounds that close on their own. The guild answers by sending its Chosen Hero.' },
+    // ------------------------------------------------ more traps
+    poison: { name: 'Poison Needle', tier: 1, cost: 30, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dmg: 6, dps: 4, dur: 6, rearm: 4,
+      desc: 'A needle in the flagstones. Poisons the hero for 6s.' },
+    alarm: { name: 'Alarm Bell', tier: 2, cost: 30, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dmg: 4, call: 7, rearm: 10,
+      desc: 'Rings when stepped on. Every monster within 7 tiles drops its post and runs at the hero for 8s.' },
+    cage: { name: 'Iron Cage', tier: 3, cost: 56, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dmg: 14, cage: 4, rearm: 9,
+      desc: 'Bars drop around the hero for 4s. Caged heroes cannot move or fight back.' },
+    teleport: { name: 'Teleport Circle', tier: 4, cost: 92, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'illusion', dmg: 10, rearm: 8,
+      desc: 'Throws the hero to a far corner of this floor, away from the healer and the rest of the party.' },
+    boulder: { name: 'Rolling Boulder', tier: 5, cost: 150, kind: 'trap', place: 'floor', hidden: true, sense: 'mech', cat: 'trap', dmg: 30, line: 5, rearm: 14,
+      desc: 'A boulder thunders down the corridor, crushing every hero in a line up to 5 tiles.' },
+    gravity: { name: 'Gravity Well', tier: 6, cost: 240, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'trap', dmg: 12, radius: 2.5, root: 2, slow: 5, rearm: 12,
+      desc: 'Crushing weight pins every hero within 2½ tiles for 2s, then slows them for 5s.' },
+    // ------------------------------------------------ more monsters
+    kobold: { name: 'Kobold', tier: 0, cost: 8, kind: 'monster', place: 'floor', cat: 'monster', hp: 28, dmg: 6, rate: 0.7, speed: 2.5, leash: 3,
+      desc: 'Small, sly and never alone for long. Cheap enough to field in numbers.' },
+    orc: { name: 'Orc', tier: 1, cost: 24, kind: 'monster', place: 'floor', cat: 'monster', hp: 120, dmg: 12, rate: 1.0, speed: 1.9, leash: 3,
+      desc: 'A thick-skinned brawler. Hits hard for its price.' },
+    lizardman: { name: 'Lizardman', tier: 2, cost: 30, kind: 'monster', place: 'floor', cat: 'monster', hp: 110, dmg: 12, rate: 0.9, speed: 2.1, leash: 3, regen: 0.015,
+      desc: 'Scaled spear-fighter that slowly closes its own wounds.' },
+    harpy: { name: 'Harpy', tier: 2, cost: 28, kind: 'monster', place: 'floor', cat: 'monster', hp: 70, dmg: 9, rate: 0.8, speed: 2.9, leash: 5, range: 2.2,
+      desc: 'Dives from two tiles away and hunts down runners across the floor.' },
+    gargoyle: { name: 'Gargoyle', tier: 3, cost: 50, kind: 'monster', place: 'floor', sense: 'illusion', cat: 'illusion', hp: 220, dmg: 20, rate: 1.2, speed: 1.6, leash: 2, statue: true, armor: 0.5, elite: true,
+      desc: 'Poses as a statue until a hero walks past. Stone skin halves damage from range.' },
+    minotaur: { name: 'Minotaur', tier: 4, cost: 130, kind: 'monster', place: 'floor', cat: 'monster', hp: 280, dmg: 26, rate: 1.4, speed: 1.7, leash: 4, charge: 1.2, elite: true,
+      desc: 'Charges heroes from up to 4 tiles away and knocks them down for 1.2s.' },
+    basilisk: { name: 'Basilisk', tier: 5, cost: 215, kind: 'monster', place: 'floor', cat: 'monster', hp: 340, dmg: 22, rate: 1.2, speed: 1.3, leash: 3, petrify: 0.3, elite: true,
+      desc: 'Every bite has a 30% chance to turn its target to stone for 2s.' },
+    vampire: { name: 'Vampire', tier: 6, cost: 255, kind: 'monster', place: 'floor', cat: 'monster', hp: 280, dmg: 28, rate: 1.0, speed: 2.4, leash: 4, drain: 0.6, undead: true, elite: true,
+      desc: 'Drinks back 60% of every wound it deals. Clerics and paladins burn it.' },
+    dullahan: { name: 'Dullahan', tier: 7, cost: 400, kind: 'monster', place: 'floor', cat: 'monster', hp: 600, dmg: 40, rate: 1.4, speed: 1.8, leash: 3, fear: 5, undead: true, elite: true,
+      desc: 'The headless rider. A hero it strikes loses their nerve for 5s and runs at the first wound.' },
+    chimera: { name: 'Chimera', tier: 8, cost: 620, kind: 'monster', place: 'floor', cat: 'monster', hp: 820, dmg: 36, rate: 1.2, speed: 1.9, leash: 3, breath: 30, breathR: 1.6, every: 5, heads: 2, elite: true,
+      desc: 'Lion, goat and serpent: bites two heroes at once and breathes fire every 5s.' },
+    // ------------------------------------------------ hordes: one den, a whole pack
+    warren: { name: 'Kobold Warren', tier: 0, cost: 40, kind: 'monster', den: true, pack: 'kobold', count: 4, place: 'floor', cat: 'monster', leash: 3,
+      desc: 'Horde. Four kobolds pour out of this hole when the gate opens.' },
+    warband: { name: 'Orc Warband', tier: 3, cost: 150, kind: 'monster', den: true, pack: 'orc', count: 4, place: 'floor', cat: 'monster', leash: 3,
+      desc: 'Horde. A camp of four orcs, fighting at this rank.' },
+    nest: { name: 'Harpy Nest', tier: 5, cost: 290, kind: 'monster', den: true, pack: 'harpy', count: 3, place: 'floor', cat: 'monster', leash: 5,
+      desc: 'Horde. Three harpies, fighting at this rank, roost here.' },
+    // ------------------------------------------------ rooms: what stands near these gets stronger
+    banner: { name: 'War Banner', tier: 2, cost: 45, kind: 'totem', place: 'floor', aura: 'monster', auraR: 2.5,
+      desc: 'Monster room. Monsters posted within 2½ tiles hit 25% harder and have 15% more health.' },
+    sigil: { name: 'Trapmaster’s Sigil', tier: 3, cost: 60, kind: 'totem', place: 'floor', aura: 'trap', auraR: 2.5,
+      desc: 'Trap room. Traps within 2½ tiles deal 20% more damage and rearm 40% faster.' },
+    // ------------------------------------------------ the boss seal
+    seal: { name: 'Boss Seal', tier: 5, cost: 520, kind: 'seal', place: 'floor',
+      desc: 'Needs a boss on this floor. While that boss lives, no hero on the floor can take the stairs or the gate, so nobody escapes. Only the rare Phantom Thief slips through. One per floor.' },
+    // ------------------------------------------------ more bosses
+    orcwarlord: { name: 'Orc Warlord', tier: 4, cost: 260, kind: 'monster', boss: true, place: 'floor', cat: 'monster', hp: 520, dmg: 28, rate: 1.2, speed: 1.6, leash: 3, summon: 'orc', every: 6, max: 3,
+      desc: 'Boss. Blows a war horn every 6s and another orc answers, up to three.' },
+    minotaurking: { name: 'Minotaur King', tier: 5, cost: 420, kind: 'monster', boss: true, place: 'floor', cat: 'monster', hp: 640, dmg: 34, rate: 1.3, speed: 1.8, leash: 4, charge: 1.6, quake: 22, quakeR: 1.8, every: 5,
+      desc: 'Boss. Charges the farthest hero it can reach and stamps the ground every 5s.' },
+    vampirelord: { name: 'Vampire Lord', tier: 7, cost: 1150, kind: 'monster', boss: true, myth: true, place: 'floor', cat: 'monster', hp: 900, dmg: 34, rate: 1.0, speed: 2.2, leash: 4, drain: 0.7, regen: 0.01, undead: true, summon: 'vampire', every: 9, max: 2,
+      desc: 'Myth boss. Heals on every bite and turns the fallen into vampires that serve it.' },
     // summoned only
     imp: { name: 'Imp', tier: 6, cost: 0, kind: 'monster', summonOnly: true, place: 'floor', cat: 'monster', hp: 60, dmg: 10, rate: 0.7, speed: 2.8, leash: 5,
       desc: 'A demon lord’s servant.' },
   };
   for (const k in RD.ITEMS) RD.ITEMS[k].id = k;
+
+  // Tags tie pieces to floor themes and to the heroes who counter them.
+  RD.TAGS = {
+    undead: ['skeleton', 'wraith', 'lich', 'vampire', 'dullahan', 'vampirelord'],
+    fire: ['rune', 'dragon', 'demonlord', 'chimera', 'imp'],
+    frost: ['frost', 'gravity'],
+    poison: ['vent', 'poison', 'slime', 'spider', 'basilisk'],
+    beast: ['goblin', 'kobold', 'orc', 'spider', 'harpy', 'minotaur', 'wyvern', 'warren', 'warband', 'nest', 'minotaurking', 'orcwarlord', 'hydra', 'chimera', 'troll', 'lizardman', 'brute', 'goblinking'],
+    arcane: ['maze', 'siphon', 'abyss', 'pylon', 'teleport', 'gravity', 'mimic', 'gargoyle', 'golem'],
+    mech: ['spikes', 'snare', 'crusher', 'darts', 'door', 'vault', 'cage', 'boulder', 'alarm', 'poison'],
+    goblinoid: ['goblin', 'kobold', 'orc', 'goblinking', 'orcwarlord', 'warren', 'warband', 'imp'],
+  };
+  for (const [tag, list] of Object.entries(RD.TAGS)) for (const k of list) if (RD.ITEMS[k]) (RD.ITEMS[k].tags = RD.ITEMS[k].tags || []).push(tag);
+  RD.hasTag = (type, tag) => !!(RD.ITEMS[type] && RD.ITEMS[type].tags && RD.ITEMS[type].tags.includes(tag));
+
+  // Floor themes: each floor dug gets one, picked from three. Matching pieces on that floor get stronger.
+  RD.THEMES = {
+    halls: { name: 'Stone Halls', desc: 'Plain cut stone. No bonus, no weakness.', tint: null },
+    crypt: { name: 'Crypt', desc: 'Undead have 35% more health and hit 20% harder here. The guild sends more clerics.', tag: 'undead', hp: 1.35, dmg: 1.2, tint: 'rgba(120,140,110,0.10)' },
+    forge: { name: 'Forge', desc: 'Fire traps and fire-breathers deal 35% more damage here.', tag: 'fire', dmg: 1.35, tint: 'rgba(255,110,40,0.10)' },
+    frozen: { name: 'Frozen Hollow', desc: 'Slows, pins and stuns last 50% longer here, and heroes walk 10% slower.', tag: 'frost', hold: 1.5, heroSlow: 0.9, tint: 'rgba(150,200,255,0.12)' },
+    fungal: { name: 'Fungal Warren', desc: 'Poison and creeping things deal 40% more damage; hordes bring one extra monster.', tag: 'poison', dmg: 1.4, hordeExtra: 1, tint: 'rgba(130,190,90,0.10)' },
+    arcane: { name: 'Arcane Labyrinth', desc: 'Glyphs and magical traps rearm 35% faster and deal 20% more damage.', tag: 'arcane', dmg: 1.2, rearm: 0.65, tint: 'rgba(180,140,230,0.10)' },
+    lair: { name: 'Beast Lair', desc: 'Beasts have 20% more health and move 20% faster here.', tag: 'beast', hp: 1.2, speed: 1.2, tint: 'rgba(170,110,70,0.10)' },
+    vault: { name: 'Gilded Vault', desc: 'Heroes who die here drop twice the gold, but greedy heroes walk in faster.', gold: 2, tint: 'rgba(227,176,75,0.08)' },
+  };
 
   RD.BASIC = ['spikes', 'darts', 'goblin', 'skeleton', 'door'];
   RD.SPECIAL = Object.keys(RD.ITEMS).filter((k) => !RD.BASIC.includes(k) && !RD.ITEMS[k].boss && !RD.ITEMS[k].summonOnly);
@@ -242,16 +328,25 @@
   RD.GROUPS = [
     { id: 'traps', name: 'Traps', kinds: ['trap'] },
     { id: 'walls', name: 'Walls & doors', kinds: ['turret', 'door'] },
-    { id: 'monsters', name: 'Monsters', kinds: ['monster'], boss: false },
+    { id: 'monsters', name: 'Monsters', kinds: ['monster'], boss: false, den: false },
+    { id: 'hordes', name: 'Hordes', kinds: ['monster'], boss: false, den: true },
+    { id: 'rooms', name: 'Rooms & seals', kinds: ['totem', 'seal'] },
     { id: 'bosses', name: 'Bosses', kinds: ['monster'], boss: true },
   ];
   RD.inGroup = (g, k) => {
     const d = RD.ITEMS[k];
-    return !d.summonOnly && g.kinds.includes(d.kind) && (g.boss == null || !!d.boss === g.boss);
+    return !d.summonOnly && g.kinds.includes(d.kind) && (g.boss == null || !!d.boss === g.boss) && (g.den == null || !!d.den === g.den);
   };
 
   // Balance dials, tuned with headless bot games. Monsters and traps scale with these on top of rank and level.
-  RD.BAL = { monHp: 1.5, monDmg: 1.2, trapDmg: 1.3, theft: 1 };
+  RD.BAL = { monHp: 1.55, monDmg: 1.25, trapDmg: 1.3, theft: 1 };
+  // Anti-stacking rules. None of them changes what a single piece does; they stop pieces chaining.
+  // They are switches so tools/fortress.js can compare a build with and without them.
+  RD.SOUL_MEND = 0.8; // a hero healed back above this share of their health can be siphoned again
+  RD.RULES = { dazeRecovery: true, soulOnce: true, pylonSight: true, pylonSpacing: true, pylonJam: true };
+  RD.PYLON_GAP = 4; // storm pylons need this many tiles between them; measured with tools/fortress.js
+  // wall pieces that stack along a corridor need room between copies of the same kind (tools/survey.js)
+  RD.GAP = { pylon: RD.PYLON_GAP, darts: 2 };
   RD.balOf = (type, key) => {
     const d = RD.ITEMS[type];
     if (d.kind === 'monster') return key === 'hp' ? RD.BAL.monHp : key === 'dmg' || key === 'breath' || key === 'quake' ? RD.BAL.monDmg : 1;
@@ -262,7 +357,18 @@
   // A piece's real numbers: rank × level × balance. `key` is a stat listed at rank F.
   RD.scaled = (type, key, lv, tier) => RD.ITEMS[type][key] * RD.TIER_MULT[tier == null ? RD.ITEMS[type].tier : tier] * RD.levelMult(lv) * RD.balOf(type, key);
 
+  // What a boss calls or a den releases, and the rank it fights at: summons one rank below their boss
+  // (never below their own blueprint), horde packs at the den's rank. Both fight at the parent's level.
+  RD.minionOf = (type, tier) => {
+    const d = RD.ITEMS[type];
+    if (tier == null) tier = d.tier;
+    if (d.summon) return { type: d.summon, kind: 'summon', tier: Math.max(RD.ITEMS[d.summon].tier, tier - 1), max: d.max, every: d.every || 5 };
+    if (d.den) return { type: d.pack, kind: 'horde', tier: Math.max(tier, RD.ITEMS[d.pack].tier), count: d.count };
+    return null;
+  };
+
   RD.TOOLS = {
+    inspect: { name: 'Info', cost: 0, desc: 'Click any placed piece for everything about it: its numbers at its level, what boosts it on its floor, what it summons and who counters it. During a raid, just click a hero, monster or trap.' },
     dig: { name: 'Dig', cost: 6, desc: 'Carve rock into corridor. The outer wall cannot be dug.' },
     fill: { name: 'Fill', cost: 3, desc: 'Collapse an empty corridor tile into rock. The hoard must stay reachable.' },
     move: { name: 'Move', cost: 0, desc: 'Pick up a trap, monster or door and set it down somewhere else, on any floor. Free.' },
@@ -276,11 +382,17 @@
   RD.POWERS = {
     tremor: { name: 'Tremor', cost: 12, cd: 8, night: 1, target: true, radius: 1.6, desc: 'Click a tile. Heroes within a tile of it are knocked down for 2s and lose 6% of their health.' },
     douse: { name: 'Douse', cost: 10, cd: 20, night: 1, desc: 'Snuff every torch for 8s. Heroes see one tile ahead, slow down and cannot spot traps.' },
+    mire: { name: 'Grasping Mire', cost: 12, cd: 14, night: 2, target: true, radius: 1.5, desc: 'Click a tile. Hands of mud hold every hero within 1.5 tiles for 1.5s, then slow them by half for 6s.' },
     lure: { name: 'Phantom Gold', cost: 14, cd: 18, night: 3, target: true, radius: 0.6, desc: 'Click a corridor. A false hoard glitters there for 10s, and heroes still hunting for gold go to it instead.' },
-    collapse: { name: 'Cave-in', cost: 16, cd: 16, night: 5, target: true, radius: 0.5, desc: 'Click an empty corridor tile. The ceiling drops and blocks it for 8s. Heroes have to find another way.' },
+    collapse: { name: 'Cave-in', cost: 16, cd: 16, night: 5, target: true, radius: 0.5, desc: 'Click an empty corridor tile. The ceiling drops and blocks it for 8s. Heroes look for another way, or wait for the dust to settle.' },
+    rearm: { name: 'Overcharge', cost: 18, cd: 30, night: 6, desc: 'Every trap rearms at once, even ones a rogue disarmed, and jammed wall traps shake free.' },
     frenzy: { name: 'Bloodlust', cost: 22, cd: 25, night: 8, desc: 'For 7s every monster hits 50% harder, attacks faster and runs 35% faster.' },
+    mend: { name: 'Dark Mending', cost: 22, cd: 30, night: 9, desc: 'Every monster in the dungeon heals half of its health.' },
     raise: { name: 'Raise the Dead', cost: 26, cd: 28, night: 11, target: true, radius: 1, desc: 'Click a corridor. Two skeletons claw out of the floor there and fight until dawn.' },
+    dread: { name: 'Dread Whisper', cost: 24, cd: 26, night: 12, target: true, radius: 2, desc: 'Click a tile. Heroes within 2 tiles hear their own deaths: for 8s they run at the first scratch.' },
     seal: { name: 'Seal the Gate', cost: 30, cd: 40, night: 14, desc: 'The front gate slams shut for 6s. Nobody leaves, so nobody reports.' },
+    smite: { name: 'Doom Bolt', cost: 34, cd: 32, night: 16, target: true, radius: 0.8, desc: 'Click a hero. A bolt from the dark takes a quarter of their health (a legend’s, a sixth). It cannot be dodged.' },
+    banish: { name: 'Banish', cost: 40, cd: 45, night: 19, target: true, radius: 0.8, desc: 'Click a hero. They vanish and reappear far from where they were heading, dazed for 2s.' },
   };
   RD.powerOpen = (G, k) => RD.age(G) >= RD.POWERS[k].night;
   RD.powerCost = (G, k) => Math.round(RD.POWERS[k].cost * (1 + 0.3 * RD.unlocked(G)));
@@ -328,21 +440,43 @@
     dragonslayer: { name: 'Dragonslayer', unique: true, minTier: 5, hp: 210, speed: 1.8, dmg: 34, rate: 1.0, range: 1.25, vision: 3, brave: 1, greed: 0.2, fleeAt: 0.1, bash: 60,
       slayer: 2, fireward: 0.5, w: 0.6,
       desc: 'Unique. Hunts bosses: double damage against them and half damage from breath and quakes.' },
+    monk: { name: 'Monk', minTier: 1, hp: 90, speed: 2.2, dmg: 12, rate: 0.6, range: 1.15, vision: 3, brave: 0.6, greed: 0.2, fleeAt: 0.2, bash: 40, dodge: 0.25, w: 1.2,
+      desc: 'Bare-handed and quick. Dodges a quarter of all trap and monster damage.' },
+    tamer: { name: 'Beast Tamer', minTier: 2, hp: 85, speed: 2.0, dmg: 10, rate: 1.0, range: 1.15, vision: 3, brave: 0.5, greed: 0.3, fleeAt: 0.3, bash: 15, tame: 2.5, w: 1,
+      desc: 'Calms beasts of its own rank or lower within 2½ tiles: they stop fighting for 6s, every 12s.' },
+    ninja: { name: 'Ninja', minTier: 3, hp: 75, speed: 2.7, dmg: 15, rate: 0.7, range: 1.15, vision: 4, brave: 0.4, greed: 0.4, fleeAt: 0.35, bash: 15, pick: 1.5,
+      detect: { mech: 0.5, illusion: 0.5 }, detectR: 1.8, unbound: true, w: 1,
+      desc: 'Cannot be slowed, pinned or caged. Spots mechanisms and illusions alike.' },
+    samurai: { name: 'Samurai', minTier: 4, hp: 120, speed: 1.9, dmg: 22, rate: 1.0, range: 1.2, vision: 3, brave: 0.85, greed: 0.2, fleeAt: 0.15, bash: 50, firstStrike: 2.5, w: 1,
+      desc: 'The first blow against each monster lands at 2½ times strength.' },
+    darkknight: { name: 'Dark Knight', minTier: 5, hp: 150, speed: 1.7, dmg: 20, rate: 1.0, range: 1.15, vision: 3, brave: 0.85, greed: 0.3, fleeAt: 0.15, bash: 55, lifesteal: 0.3, w: 0.9,
+      desc: 'Heals for 30% of the damage it deals.' },
+    shieldhero: { name: 'Shield Hero', unique: true, minTier: 3, hp: 260, speed: 1.6, dmg: 6, rate: 1.0, range: 1.15, vision: 3, brave: 1, greed: 0.1, fleeAt: 0.1, bash: 40, taunt: 3, guard: 0.5, w: 0.8,
+      desc: 'Unique. Every monster within 3 tiles attacks it instead of the party, and it takes half damage. Barely hits back.' },
+    goblinslayer: { name: 'Goblin Slayer', unique: true, minTier: 2, hp: 140, speed: 1.9, dmg: 18, rate: 0.9, range: 1.15, vision: 3, brave: 0.9, greed: 0, fleeAt: 0.2, bash: 45,
+      detect: { mech: 0.8 }, detectR: 1.5, bane: 'goblinoid', w: 0.8,
+      desc: 'Unique. Triple damage to goblins, kobolds, orcs and imps, and an eye for their snares.' },
+    phantomthief: { name: 'Phantom Thief', unique: true, minTier: 5, hp: 110, speed: 2.8, dmg: 14, rate: 0.6, range: 1.15, vision: 4, brave: 0.5, greed: 1, fleeAt: 0.4, bash: 20, pick: 0.6,
+      detect: { mech: 0.7, magic: 0.7 }, detectR: 2, disarm: 0.8, sealwalker: true, thief: 2, w: 0.5,
+      desc: 'Unique. Walks through boss seals as if they were not there, and carries off twice the gold.' },
+    sage: { name: 'Sage', unique: true, minTier: 6, hp: 100, speed: 1.8, dmg: 20, rate: 1.4, range: 2.8, vision: 5, brave: 0.6, greed: 0.2, fleeAt: 0.3, bash: 20, cure: 3,
+      detect: { magic: 1, illusion: 1, mech: 0.6 }, detectR: 3.5, w: 0.5,
+      desc: 'Unique. Sees almost every trap within 3½ tiles and lifts dazes, pins and slows from the party.' },
     chosen: { name: 'Chosen Hero', unique: true, minTier: 7, hp: 280, speed: 2.0, dmg: 42, rate: 0.9, range: 1.25, vision: 4, brave: 1, greed: 0, fleeAt: 0, bash: 80, slayer: 2.5, heal: 3, healR: 1.5, w: 0.15,
       desc: 'Unique. Born to end demon lords. Deals 2.5× damage to bosses and never runs.' },
   };
-  RD.COMMON = ['knight', 'rogue', 'mage', 'cleric', 'scout', 'ranger', 'berserker', 'alchemist', 'bard'];
+  RD.COMMON = ['knight', 'rogue', 'mage', 'cleric', 'scout', 'ranger', 'berserker', 'alchemist', 'bard', 'monk', 'tamer', 'ninja', 'samurai', 'darkknight'];
   RD.UNIQUE = Object.keys(RD.CLASSES).filter((k) => RD.CLASSES[k].unique);
-  RD.TITLES = { paladin: 'the Radiant', swordsaint: 'of the Thousand Cuts', shadow: 'the Unseen', archmage: 'the Starborn', saint: 'the Merciful', dragonslayer: 'the Wyrmbane', chosen: 'the Chosen' };
+  RD.TITLES = { paladin: 'the Radiant', swordsaint: 'of the Thousand Cuts', shadow: 'the Unseen', archmage: 'the Starborn', saint: 'the Merciful', dragonslayer: 'the Wyrmbane', shieldhero: 'of the Iron Shield', goblinslayer: 'who Hunts Goblins', phantomthief: 'the Uncatchable', sage: 'of the Thousand Tomes', chosen: 'the Chosen' };
 
   RD.TRAITS = {
-    greedy: { name: 'Greedy', w: 3, desc: 'Detours for any chest it sees.' },
-    coward: { name: 'Craven', w: 2, desc: 'Runs at half health.' },
-    reckless: { name: 'Reckless', w: 2, desc: 'Ignores warnings and rarely retreats.' },
-    keen: { name: 'Keen-eyed', w: 2, desc: 'Has a chance to spot any hidden trap next to it.' },
-    stone: { name: 'Sending Stone', w: 1.2, desc: 'Reports to the guild even if it dies. The guild hands out more of them after a party vanishes.' },
-    stout: { name: 'Stout', w: 2, desc: '+25% health.' },
-    swift: { name: 'Swift', w: 2, desc: '+20% speed.' },
+    greedy: { icon: '💰', name: 'Greedy', w: 3, desc: 'Detours for any chest it sees.' },
+    coward: { icon: '😨', name: 'Craven', w: 2, desc: 'Runs at half health.' },
+    reckless: { icon: '💢', name: 'Reckless', w: 2, desc: 'Ignores warnings and rarely retreats.' },
+    keen: { icon: '👁', name: 'Keen-eyed', w: 2, desc: 'Has a chance to spot any hidden trap next to it.' },
+    stone: { icon: '🔮', name: 'Sending Stone', w: 1.2, desc: 'Reports to the guild even if it dies. The guild hands out more of them after a party vanishes.' },
+    stout: { icon: '🛡', name: 'Stout', w: 2, desc: '+25% health.' },
+    swift: { icon: '💨', name: 'Swift', w: 2, desc: '+20% speed.' },
   };
 
   RD.OMENS = [
@@ -381,6 +515,44 @@
     map: ['I charted {n} more tiles of the place.', 'Added {n} tiles to the guild map.'],
     none: ['Nobody came back. The guild is guessing.', 'Not one of them returned. The tavern is quiet.'],
   };
+  // The Dungeon Core: the voice of the dungeon itself. {n} hero, {t} title, {c} class, {g} gold, {m} monster, {k} count, {night}.
+  RD.VOICE = {
+    night: ['Night {night}. {k} heroes on their way. How generous of the guild.', 'Fresh adventurers. I can smell the optimism.', 'Build quickly, keeper. They are sharpening their swords.', 'Another party, all of them sure they are the main character.', '{k} heroes tonight. I hope they brought snacks. For me.'],
+    legend: ['A legend comes tonight: {n} {t}. Make it a short legend.', '{n} {t}. The bards will need a sadder song.', 'They are sending {n} {t}. I am flattered.'],
+    gate: ['Come in. Mind the floor.', 'The gate is open. Dinner is served.', 'Welcome, heroes. Please, touch everything.', 'Doors open. Let the screaming begin.', 'In you come. Nobody has ever regretted it. Out loud.'],
+    first: ['First blood. Delicious.', '{n} will not be filing a report.', 'One down. The others did not even notice.'],
+    kill: ['Another one for the bone pile.', '{n} the {c}. Forgotten already.', 'The guild will need a new {c}.', 'Mm. Crunchy.', 'Do not worry, {n}. I will look after your boots.', 'That {c} looked expensive. Looked.'],
+    legendKill: ['{n} {t}! They will sing about this. Badly.', 'A legend, ended. I will keep the sword.', 'So much for destiny, {n}.'],
+    nemesisKill: ['{n}. Finally. I saved a spot for you.', 'The nemesis falls. Collect the bounty, keeper.'],
+    last: ['And that is the last of them.', 'Silence. My favourite sound.', 'All of them. Every last one.'],
+    escape: ['{n} got out. Now the guild knows.', 'A witness. I hate witnesses.', 'Run, {n}. Tell them what you saw. Then come back.'],
+    escapeGold: ['{n} is walking off with {g} of my gold!', 'Thief! {g} gold, gone.', 'That was MY treasure, {n}.'],
+    loot: ['Hands OFF the hoard!', '{n} is in the vault. Stop them!', 'Someone is touching my gold. Do something.'],
+    flee: ['Running already, {n}?', 'Look at {n} go.', 'Leaving so soon, {n}? You just got here.'],
+    bossDown: ['They killed my {m}! Unforgivable.', 'The {m} has fallen. I am taking this personally.'],
+    perfect: ['Not a single survivor. The guild learns nothing.', 'Flawless. They walked in as heroes and stayed as decor.'],
+    robbed: ['They took {g} gold. I want it back with interest.', 'My hoard is lighter. My mood is darker.'],
+    thin: ['The hoard is getting thin, keeper. Very thin.'],
+    power: {
+      tremor: ['Feel that?'], douse: ['Lights out.'], mire: ['Stay a while.'], lure: ['Ooh, shiny.'], collapse: ['Mind your heads.'],
+      rearm: ['Wake up, my lovelies.'], frenzy: ['Feed!'], mend: ['Up you get.'], raise: ['Rise. You have work to do.'],
+      dread: ['Can you hear it? That is your future.'], seal: ['Nobody leaves.'], smite: ['Begone.'], banish: ['Not that way.'],
+    },
+  };
+
+  // How a night went, from S (nobody got out, nothing taken) down to F.
+  RD.nightGrade = function (d) {
+    const n = d.killed.length + d.escaped.length;
+    if (!n) return 'C';
+    const kill = d.killed.length / n;
+    if (kill === 1 && !d.goldLost && d.killed.length >= 2) return 'S';
+    if (kill >= 0.75 && d.goldLost <= 10) return 'A';
+    if (kill >= 0.5 && d.goldLost <= 40) return 'B';
+    if (kill >= 0.25 || d.goldLost <= 20) return 'C';
+    if (kill > 0) return 'D';
+    return 'F';
+  };
+
   RD.WHAT = { trap: 'trap', turret: 'dart slit', monster: 'monster', door: 'door', hoard: 'hoard', chest: 'chest', stairs: 'stairs' };
   for (const k in RD.ITEMS) RD.WHAT[k] = RD.ITEMS[k].name.toLowerCase();
   RD.WHAT.mimic = 'chest';

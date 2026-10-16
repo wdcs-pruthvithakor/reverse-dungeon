@@ -13,6 +13,7 @@ New players get a one-click start on Apprentice and a guided first night (place 
 ## Modes, trophies and pacts
 
 - **Campaign** is the full climb: hold 20–30 nights depending on difficulty.
+- **Saga** is 100 nights. Ranks, floors, powers and guild strength move about four times slower than in Campaign (the Demon Lord arrives around night 97), so each rank of hero is a real fight and older pieces stay useful far longer. Income, kill bounties and the gold heroes drop are scaled down to match, so the hoard has to be defended all the way. Saga keeps digging past floor V. With the bot, Saga ends in a win about 5 times in 8 on Keeper and 1 in 8 on Overlord, with deaths spread across nights 50–90.
 - **Quick** is 12 nights in which everything (ranks, floors, guild strength, income) moves 2.2× faster, so a 15–25 minute run still reaches bosses and the Demon Lord.
 - **Daily dungeon** uses Quick rules on Keeper with a seed taken from today's date, plus two **twists** rolled for the day, so everyone gets the same unusual dungeon. Your best score for each day is kept.
 - **Twists** change one run's rules (Gold Fever, Swarm, Burned Archive, Sending Stones, Buyer's Market, Age of Thrones, Endless Night, Age of Legends, Glass Fangs, Rush). Pick any for Campaign or Quick; each adds 15% to the score.
@@ -33,15 +34,23 @@ Hold the hoard for the nights your difficulty asks (20–30) to win. You can kee
 ## Ranks, unlocks and the guild's rating
 
 - Everything has a rank: **F, E, D, C, B, A, S, SS, SSS**, plus **EX** for the Demon Lord. Each rank is 1.5× stronger than the one below.
-- You start with F-rank blueprints. Higher ranks unlock as you survive (E on night 3, D on 5, C on 8, up to SSS on 23 and the Demon Lord on 26). New floors can be dug on nights 4, 9, 14 and 19. The hoard is carried down to each new floor.
+- You start with F-rank blueprints. Higher ranks unlock as you survive (E on night 3, D on 5, C on 8, up to SSS on 23 and the Demon Lord on 26). New floors can be dug on nights 4, 9, 14 and 19. The hoard is carried down to each new floor. A normal run stops at five floors; in endless mode and Saga the dungeon keeps going down, one floor every 50 nights (VI on night 50, VII on 100, and so on to X), each costing more.
 - **Elite monsters** outfight a whole party of their own rank. **Bosses** (one per floor) summon, breathe fire or shake the ground. **Myth bosses** (Hydra, Behemoth) and the **Demon Lord** come late.
 - The guild **rates your dungeon from what survivors saw**. Let someone escape after seeing your S-rank wyvern and S-rank parties come next. A strong piece nobody lives to report stays a secret. Heavy losses also push the rating up, and quiet nights let it drift down.
-- Adventurers have ranks too. Classes open up with rank: Knight, Rogue, Mage, Cleric and Scout from the start, then Ranger (E), Berserker (D), Alchemist (C) and Bard (B). The guild builds parties by role: a tank, a healer once parties get big, a trap-finder when it knows about your traps, and someone who sees through illusions.
-- Rare **legends** sometimes join: Paladin, Sword Saint, Shadow, Archmage, Saint, Dragonslayer, or the Chosen Hero.
+- Adventurers have ranks too. Classes open up with rank: Knight, Rogue, Mage, Cleric and Scout from the start, then Ranger and Monk (E), Berserker and Beast Tamer (D), Alchemist and Ninja (C), Bard and Samurai (B), and Dark Knight (A). Monks dodge, tamers calm beasts, ninjas slip pins and cages, samurai open with a heavy first strike, dark knights drain life. The guild builds parties by role: a tank, a healer once parties get big, a trap-finder when it knows about your traps, and someone who sees through illusions.
+- Rare **legends** sometimes join: Paladin, Sword Saint, Shadow, Archmage, Saint, Dragonslayer, Shield Hero (draws every blow), Goblin Slayer (triple damage to goblinoids), Phantom Thief (walks through Boss Seals, steals double), Sage (cures and sees far), or the Chosen Hero.
 - When the guild knows about one of your bosses, it often sends a **strike team** of higher-rank specialists who hunt the boss before going for the hoard. A known Demon Lord always brings the Chosen Hero.
 - **Escaping is not enough to grow.** Heroes earn experience by killing monsters, looting, mapping, disarming and surviving damage. Only those who earned it come back stronger or a rank higher. Ones who ran with nothing may quit the guild.
 - A high-rank hero partly shrugs off pins, dazes, slows and stuns from traps far below its rank.
 - **The guild keeps up.** Adventurers in general track the ranks you have unlocked, even if nobody escapes. A party that vanishes makes the next one bigger and better supplied with Sending Stones. From night 15, every night the guild fails to take gold adds **renown** (shown as a `+` on the rating), making later heroes stronger. Easy nights do not last.
+
+## Floors, hordes, rooms and seals
+
+- **Floor types.** Digging a new floor asks *What lies below?* and offers three of eight themes: Stone Halls, Crypt, Forge, Frozen Hollow, Fungal Grotto, Arcane Sanctum, Beast Lair and Gilded Vault. A theme boosts pieces with matching tags (undead, fire, frost, poison, beast, arcane, mech, goblinoid) and some add an extra monster to every horde. The floor tab shows its theme.
+- **Hordes.** A Kobold Warren, Orc Warband or Harpy Nest is a den that releases a pack of monsters when heroes come close.
+- **Rooms.** A War Banner makes monsters within 2.5 tiles hit 25% harder with 15% more health; a Trapmaster's Sigil makes nearby traps hit 20% harder and rearm 40% faster.
+- **Boss Seal** (A rank). Needs a boss on the floor, one per floor. While that boss lives, heroes on the floor can't take the stairs or leave by the gate, so fleeing heroes have to fight it, and anyone still sealed in at the time limit dies. Only the Phantom Thief can walk through. Selling the floor's last boss refunds the seal. The floor tab shows a lock.
+- **More pieces.** Traps: Poison Needle, Alarm Bell, Iron Cage, Teleport Circle, Rolling Boulder, Gravity Well. Monsters: Kobold, Orc, Lizardman (regenerates), Harpy (ranged), Gargoyle (poses as a statue), Minotaur (charges), Basilisk (petrifies), Vampire (drains), Dullahan (fear), Chimera. Bosses: Orc Warlord, Minotaur King, Vampire Lord (myth).
 
 ## Difficulty
 
@@ -62,6 +71,10 @@ Balance was tuned with headless bot games. A bot that builds kill zones, re-trap
 - **Heroes** get random names, ranks and traits (Greedy, Craven, Reckless, Keen-eyed, Stout, Swift, Sending Stone). Survivors can come back as stronger veterans, sometimes a rank higher.
 - **The guild adapts.** Whatever killed the most heroes decides who it hires next. When it catches your walls moving, it gets warier and sends scouts.
 - **Knowledge is stale.** Toggle **Guild's map** (`G`) to see what they believe. Stale entries are crossed out.
+
+## Guide and hero details
+
+**Guide** (top bar, or on the start screen) lists everything in the game, locked or not: the basics, every power with its icon, cost, recharge and opening night, every piece with its numbers, all 25 hero classes with their abilities, traits, floor types, omens and twists. Every piece, power and class in the Guide opens a full page, and so does any placed piece clicked with the **Info** tool (first in the toolbar) or, during a raid, any hero, monster or trap you click with no power selected. A piece's page has its numbers at its level and rank, a Lv1–5 table, what its floor and nearby rooms add, who can spot, disarm or out-damage it, and for bosses and hordes, what they bring: summons fight one rank below their boss (never below their own blueprint) at the boss's level, and horde packs fight at the den's rank, so a Demon Lord's imps are SSS-rank and a Lich's skeletons B-rank. The **Summons & hordes** tab lists them all with those real numbers. Click any hero in the Ledger or the dispatch card for their full stats (health, damage, reach, speed, sight, when they run), abilities in numbers (a healer's health per second and range, a rogue's disarm time, detection chances), traits, and, during a raid, what they are doing right now. Hovering or tapping a raid power shows its name, cost and effect above the bar.
 
 ## Controls
 
@@ -84,13 +97,27 @@ Powers open as the run goes on (Quick runs reach them sooner), and cost more mal
 |---|---|---|
 | Tremor | night 1 | Knocks down heroes around a tile |
 | Douse | night 1 | Snuffs every torch: heroes see one tile and can't spot traps |
+| Grasping Mire | night 2 | Holds heroes around a tile for 1.5s, then halves their speed for 6s |
 | Phantom Gold | night 3 | A false hoard that heroes still hunting for gold walk to |
-| Cave-in | night 5 | Blocks a corridor tile for 8s |
+| Cave-in | night 5 | Blocks a corridor tile for 8s. Heroes take another way if there is a sensible one, otherwise wait for it to clear |
+| Overcharge | night 6 | Every trap rearms at once, even disarmed ones, and jammed wall traps shake free |
 | Bloodlust | night 8 | Monsters hit harder, attack faster and run faster for 7s |
+| Dark Mending | night 9 | Every monster heals half its health |
 | Raise the Dead | night 11 | Two skeletons appear where you click |
+| Dread Whisper | night 12 | Heroes around a tile run at the first scratch for 8s |
 | Seal the Gate | night 14 | Nobody can leave for 6s, so nobody reports |
+| Doom Bolt | night 16 | A quarter of one hero's health (a sixth for legends); cannot be dodged |
+| Banish | night 19 | Sends one hero to the far side of their floor, dazed |
 
-Monsters guard their posts, but run down anyone fleeing or carrying gold (fast monsters furthest; bosses never leave their lair). If you look at another floor during a raid, the view returns to the heroes after a few seconds. Heroes call out what is happening in speech bubbles, and a small eye marks every trap the party already knows about.
+Past seven open powers the bar shows icons and costs only; hover one for its name.
+
+**Stacking rules.** No single piece is weakened, but pieces can't be chained into an unbeatable maze: a hero who shakes off a Wandering Rune keeps their head for 8 seconds; a Soul Siphon tears 30% of a hero's *current* health, and a torn soul only tears again once the hero has been healed back above 80% of their health (later siphons on a still-torn hero do their flat damage); Storm Pylon lightning needs line of sight, pylons need 4 tiles between them, dart slits 2 (no two side by side), heroes see a pylon's whole danger circle, and rogues who have felt a pylon or dart slit can jam it for 12 seconds (it takes them three times as long as disarming a trap, under fire). `node tools/fortress.js 3 3` (add `old` to switch the rules off) measures a deep Rune/Siphon/Pylon fortress against an SSS strike force; with the rules on it kills about 40% instead of 84%. Since pylon jams became temporary (12s), pylons are the strongest piece on that test: a pylon-only build kills about 39%, against 8% for golems and wyverns on the same budget.
+
+**The dungeon talks.** The Core, your dungeon's voice, comments on kills, escapes, thefts, fallen bosses and the powers you use. Each night opens with a **Guild dispatch** card listing who is coming, their traits (💰 Greedy, 😨 Craven, 💢 Reckless, 👁 Keen-eyed, 🔮 Sending Stone, 🛡 Stout, 💨 Swift) and what each class does. A heavy blow freezes the raid for a few frames, the last kill of the night plays in slow motion, and the dawn report stamps a **night grade** from S (nobody escaped, nothing taken) to F. **Share report** saves a picture of the night with a link to the same dungeon, or opens the device's share sheet where there is one.
+
+First-time players skip the menu and go straight into the guided first night, so the first raid starts within seconds.
+
+Monsters guard their posts, but run down anyone fleeing or carrying gold (fast monsters furthest; bosses never leave their lair). During a raid the view follows the heroes between floors. Pick a floor yourself and it stays there until you press **Follow heroes** again. Heroes call out what is happening in speech bubbles, and a small eye marks every trap the party already knows about.
 
 ## Web portals
 
@@ -127,4 +154,4 @@ The game saves itself (in the portal's data module when there is one, else `loca
 | `js/portal.js` | Web portal adapter (CrazyGames SDK v3): gameplay events, ads, cloud saves |
 | `js/ui.js` | DOM panels, floor tabs, stat panel, tutorial, modals, input, portal hooks and the frame loop |
 | `fonts/` | Bundled Jacquard 24, Alegreya Sans and DM Mono (latin subset) with their licenses |
-| `tools/` | Headless tools, not part of the game upload: `node tools/check.js` runs regression checks, `node tools/balance.js <difficulty> <games> <nights> <mode>` lets a competent bot play to measure difficulty |
+| `tools/` | Headless tools, not part of the game upload: `check.js` (regression checks), `balance.js <difficulty> <games> <nights> <mode>` (a competent bot measures difficulty; `OLD_RULES=1` switches the stacking rules off), `stacks.js <night>` and `killbox.js <night>` (same-budget builds against the same party), `fortress.js <maps> <trials> [old]` (a deep trap fortress against an SSS strike force), `survey.js <night>` (each piece type alone on the same budget, to spot over- and under-priced pieces) |

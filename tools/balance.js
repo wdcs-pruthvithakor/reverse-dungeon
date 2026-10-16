@@ -3,6 +3,8 @@
 // sells outdated pieces, levels everything, and puts a boss on every floor.
 //   node tools/balance.js [difficulty=normal] [games=8] [nights=30] [mode=campaign] [verbose=0]
 const RD = require('./load')();
+if (process.env.OLD_RULES) for (const k in RD.RULES) RD.RULES[k] = false;
+if (process.env.NO_RULES) for (const k of process.env.NO_RULES.split(',')) RD.RULES[k] = false;
 const [diff = 'normal', games = '8', nightsArg = '30', mode = 'campaign', verbose = '0'] = process.argv.slice(2);
 const I = RD.ITEMS;
 function route(G) {

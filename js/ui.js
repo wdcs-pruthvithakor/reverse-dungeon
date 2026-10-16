@@ -14,7 +14,7 @@
 
   const ui = (RD.ui = {
     partyKey: '', logKey: '', idle: 0, drawnAt: 0, drawnHover: -2,
-    tool: 'spikes', carry: null, power: null, speed: 1, previewError: null, follow: true, diff: 'easy', mode: 'campaign', pact: null, hoverIt: null, groups: {},
+    tool: 'spikes', carry: null, power: null, speed: 1, previewError: null, follow: true, diff: 'easy', mode: 'campaign', pact: null, twists: [], challenge: null, hoverIt: null, groups: {},
     touch: false, armed: -1, adPause: false, canSave: true, tut: 0,
   });
   let G = null;
@@ -31,7 +31,31 @@
   // ---------------------------------------------------------------- what carries over between dungeons
   const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const seedOf = (str) => { let h = 2166136261; for (const ch of str) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return (h >>> 0) % 1e6; };
-  const meta = () => ({ trophies: {}, slain: 0, runs: 0, best: {}, daily: {}, ...store.get('meta', {}) });
+  const meta = () => ({ trophies: {}, slain: 0, runs: 0, best: {}, daily: {}, souls: 0, heart: {}, streak: 0, lastDay: null, gift: null, ...store.get('meta', {}) });
+  // the daily dungeon's two twists, the same for everyone on a given day
+  const dailyTwists = (day) => {
+    const rng = RD.makeRng(seedOf('rd-twists-' + day));
+    return rng.shuffle(Object.keys(RD.TWISTS)).slice(0, 2);
+  };
+  const yesterday = () => { const d = new Date(); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  // coming back on consecutive days keeps a streak; the first dungeon of each day pays a gift of souls
+  function touchStreak() {
+    const m = meta(), day = today();
+    if (m.lastDay === day) return;
+    m.streak = m.lastDay === yesterday() ? m.streak + 1 : 1;
+    m.lastDay = day;
+    store.set('meta', m);
+    if (m.streak >= 7) award('streak7');
+  }
+  function claimGift() {
+    const m = meta(), day = today();
+    if (m.gift === day) return 0;
+    const n = Math.min(20, 2 * m.streak);
+    m.gift = day;
+    m.souls += n;
+    store.set('meta', m);
+    return n;
+  }
   const has = (id) => !!meta().trophies[id];
   function award(id) {
     const m = meta();
@@ -60,6 +84,7 @@
     if (d.killed.length >= 2 && !d.escaped.length) award('perfect');
     if (d.killed.some((h) => h.title)) award('legend');
     if (d.killed.some((h) => h.cls === 'chosen')) award('chosen');
+    if (d.killed.some((h) => h.nemesis)) award('nemesis');
     const team = d.killed.concat(d.escaped).filter((h) => h.team);
     if (team.length && team.every((h) => d.killed.includes(h))) award('hunters');
     if (G.stats.held >= 5) award('survive5');
@@ -73,6 +98,7 @@
       if (G.mode !== 'campaign') award('quick');
       if (G.diff === 'hard' || G.diff === 'nightmare') award('win_hard');
       if (G.diff === 'nightmare') award('win_abyss');
+      if ((G.twists || []).length >= 3) award('twisted');
     }
   }
   function recordRun() {
@@ -80,11 +106,13 @@
     const score = RD.score(G);
     const key = `${G.mode}:${G.diff}`;
     const prev = m.best[key] || 0;
+    const souls = RD.souls(G);
+    m.souls += souls;
     m.runs++;
     if (score > prev) m.best[key] = score;
     if (G.mode === 'daily' && G.daily) m.daily[G.daily] = Math.max(m.daily[G.daily] || 0, score);
     store.set('meta', m);
-    return { score, best: Math.max(prev, score), isBest: score > prev };
+    return { score, best: Math.max(prev, score), isBest: score > prev, souls };
   }
 
   function probeStorage() {
@@ -238,7 +266,7 @@
   // ---------------------------------------------------------------- floors
   function setFloor(f, manual) {
     if (f < 0 || f >= G.floors) return;
-    if (manual && G.phase === 'raid') ui.follow = false;
+    if (manual && G.phase === 'raid') { ui.follow = false; ui.followHold = 4; }
     RD.view.floor = f;
     RD.fxFloor(f);
     renderFloors();
@@ -300,8 +328,9 @@
     const hp = live ? Math.max(0, Math.ceil(h.hp)) : h.maxHp;
     li.title = `${C.desc}\nHealth ${h.maxHp} · Damage ${Math.round(h.dmg)} every ${h.rate}s`;
     const prey = h.hunt != null && G.items.get(h.hunt);
+    const wanted = h.nemesis ? `<span class="chip wanted" title="Escaped you ${h.escapes} times. Killing them pays a triple bounty.">Nemesis · escaped ${h.escapes}×</span>` : '';
     const hunt = h.hunt != null ? `<span class="chip hunt" title="Part of a strike team. Goes for this boss before the hoard.">Hunting ${prey ? esc(RD.ITEMS[prey.type].name) : 'a boss'}</span>` : '';
-    li.innerHTML = `<span></span><div class="who"><b>${tierTag(h.tier)} ${esc(h.name)}</b><small>${h.title ? `<em>${esc(h.title)}</em> · ` : ''}${C.name}${live ? ' · ' : ''}</small>${state}<div class="chips">${hunt}${vet}${chips}</div>${live ? `<div class="bar"><i style="width:${(100 * hp) / h.maxHp}%"></i></div>` : ''}</div><span class="hp">${hp}<br><small>hp</small></span>`;
+    li.innerHTML = `<span></span><div class="who"><b>${tierTag(h.tier)} ${esc(h.name)}</b><small>${h.title ? `<em>${esc(h.title)}</em> · ` : ''}${C.name}${live ? ' · ' : ''}</small>${state}<div class="chips">${wanted}${hunt}${vet}${chips}</div>${live ? `<div class="bar"><i style="width:${(100 * hp) / h.maxHp}%"></i></div>` : ''}</div><span class="hp">${hp}<br><small>hp</small></span>`;
     li.firstChild.replaceWith(cv);
     return li;
   }
@@ -359,7 +388,8 @@
   }
 
   function renderOmen() {
-    $('omen').innerHTML = `<span class="tag">Tonight’s omen</span><b>${esc(G.omen.name)}</b><span>${esc(G.omen.text)}</span>`;
+    const tw = (G.twists || []).map((k) => `<b class="twist" title="${esc(RD.TWISTS[k].desc)}">${esc(RD.TWISTS[k].name)}</b>`).join('');
+    $('omen').innerHTML = `<span class="tag">Tonight’s omen</span><b>${esc(G.omen.name)}</b>${tw}<span>${esc(G.omen.text)}</span>`;
   }
 
   function renderPhase() {
@@ -370,25 +400,36 @@
     if (raid) renderPowers();
   }
 
+  // the raid's power bar: open powers, plus the next one to come with the night it opens
   function renderPowers() {
     const box = $('powers');
     box.innerHTML = '';
-    for (const k of Object.keys(RD.POWERS)) {
+    const keys = Object.keys(RD.POWERS);
+    const next = keys.find((k) => !RD.powerOpen(G, k));
+    for (const k of keys) {
+      const open = RD.powerOpen(G, k);
+      if (!open && k !== next) continue;
       const p = RD.POWERS[k];
-      const b = el('button', 'power' + (ui.power === k ? ' on' : ''));
+      const b = el('button', 'power' + (ui.power === k ? ' on' : '') + (open ? '' : ' locked'));
       b.type = 'button';
       b.dataset.power = k;
-      b.title = p.desc;
+      b.title = open ? `${p.name}: ${p.desc}` : `${p.name} opens on night ${RD.realNight(G, p.night)}. ${p.desc}`;
       const cv = el('canvas');
       RD.drawIcon(cv, k, 28);
-      b.append(cv, el('span', null, `${p.name} <span class="cost">${p.cost}</span>`), el('i', 'cool'));
+      b.append(cv, el('span', null, `<span class="pname">${esc(p.name)}</span> <span class="cost">${open ? RD.powerCost(G, k) : 'night ' + RD.realNight(G, p.night)}</span>`), el('i', 'cool'));
       b.onclick = () => {
-        if (k === 'douse') {
-          const err = RD.usePower(G, 'douse');
-          toast(err || 'The torches gutter out.', !err);
+        if (!open) return toast(`${p.name} opens on night ${RD.realNight(G, p.night)}.`);
+        if (!p.target) {
+          const err = RD.usePower(G, k);
+          toast(err || `${p.name}!`, !err);
           ui.power = null;
-        } else ui.power = ui.power === k ? null : k;
+        } else {
+          ui.power = ui.power === k ? null : k;
+          if (ui.power) toast(`${p.name}: pick a tile on the map.`, true);
+        }
+        ui.armed = -1;
         renderPowers();
+        tickPowers();
       };
       box.append(b);
     }
@@ -396,8 +437,9 @@
   function tickPowers() {
     for (const b of document.querySelectorAll('.power')) {
       const k = b.dataset.power;
+      if (!RD.powerOpen(G, k)) { b.disabled = false; continue; }
       const cd = G.R.powers[k];
-      b.disabled = cd > 0 || G.malice < RD.POWERS[k].cost;
+      b.disabled = cd > 0 || G.malice < RD.powerCost(G, k);
       b.querySelector('.cool').style.width = cd > 0 ? (100 * cd) / RD.POWERS[k].cd + '%' : '0';
     }
   }
@@ -437,11 +479,12 @@
   function click(i) {
     if (i < 0) return;
     if (G.phase === 'raid') {
-      if (ui.power === 'tremor') {
-        const err = RD.usePower(G, 'tremor', i);
-        if (err) toast(err);
+      if (ui.power && RD.POWERS[ui.power].target) {
+        const err = RD.usePower(G, ui.power, i);
+        if (err) return toast(err);
         ui.power = null;
         renderPowers();
+        tickPowers();
       }
       return;
     }
@@ -502,7 +545,13 @@
 
   // during a raid, keep the camera on the floor where the heroes are
   function follow() {
-    if (!ui.follow || !G.R) return;
+    if (!G.R) return;
+    // looking at another floor on purpose holds the camera for a few seconds, unless you are aiming a power
+    if (!ui.follow) {
+      if (ui.power) ui.followHold = 4;
+      if ((ui.followHold -= 0.2) > 0) return;
+      ui.follow = true;
+    }
     const live = G.R.heroes.filter(RD.heroAlive);
     if (!live.length || live.some((h) => RD.fl(h.tile) === RD.view.floor)) return;
     setFloor(Math.max(...live.map((h) => RD.fl(h.tile))));
@@ -556,31 +605,41 @@
     const live = G && G.phase === 'build' && hasSave() ? G : null;
     const day = today();
     const dailyBest = m.daily[day];
+    const dTw = dailyTwists(day);
     const radios = (name, entries, cur) => entries.map(([k, d, locked]) => `<label class="diff${cur === k ? ' on' : ''}${locked ? ' off' : ''}"><input type="radio" name="${name}" value="${k}"${cur === k ? ' checked' : ''}${locked ? ' disabled' : ''}><b>${esc(d.name)}</b><span>${esc(d.blurb || d.desc)}</span></label>`).join('');
     const modes = radios('mode', Object.entries(RD.MODES).filter(([k]) => k !== 'daily'), ui.mode);
     const diffs = radios('diff', Object.entries(RD.DIFF).map(([k, d]) => [k, { name: d.name, blurb: `${d.blurb} Hold ${d.win} nights.` }]), ui.diff);
     const pacts = radios('pact', [['', { name: 'No pact', desc: 'Start as you are.' }]].concat(Object.entries(RD.PACTS).map(([k, p]) => [k, { name: p.name, desc: m.trophies[p.trophy] ? p.desc : `Locked. Earn “${RD.TROPHIES[p.trophy].name}”: ${RD.TROPHIES[p.trophy].desc}` }, !m.trophies[p.trophy]])), ui.pact || '');
-    const summary = () => `${RD.MODES[ui.mode].name} · ${RD.DIFF[ui.diff].name} · hold ${RD.MODES[ui.mode].win || RD.DIFF[ui.diff].win} nights${ui.pact ? ' · ' + RD.PACTS[ui.pact].name : ''}`;
+    const twists = Object.entries(RD.TWISTS).map(([k, t]) => `<label class="diff${ui.twists.includes(k) ? ' on' : ''}"><input type="checkbox" name="twist" value="${k}"${ui.twists.includes(k) ? ' checked' : ''}><b>${esc(t.name)}</b><span>${esc(t.desc)}</span></label>`).join('');
+    const summary = () => `${RD.MODES[ui.mode].name} · ${RD.DIFF[ui.diff].name} · hold ${RD.MODES[ui.mode].win || RD.DIFF[ui.diff].win} nights${ui.pact ? ' · ' + RD.PACTS[ui.pact].name : ''}${ui.twists.length ? ` · ${ui.twists.length} twist${ui.twists.length > 1 ? 's' : ''} (+${15 * ui.twists.length}% score)` : ''}`;
     const got = Object.keys(m.trophies).length;
+    const chal = ui.challenge;
     openModal(`
+      ${chal ? `<div class="resume challenge">
+        <div><b>A friend challenged you</b><span>${esc(RD.MODES[chal.mode].name)} · ${esc(RD.DIFF[chal.diff].name)} · seed ${chal.seed}${chal.twists.length ? ' · ' + chal.twists.map((k) => esc(RD.TWISTS[k].name)).join(', ') : ''}${chal.score ? ` · beat ${chal.score}` : ''}</span></div>
+        <button type="button" class="go" id="accept" data-focus>Accept</button>
+      </div>` : ''}
       ${live ? `<div class="resume">
         <div><b>Your dungeon awaits</b><span>${esc(RD.modeOf(live).name)} · ${esc(RD.DIFF[live.diff].name)} · night ${live.raid}${live.endless ? ' (endless)' : ` of ${RD.winAt(live)}`} · ${live.gold} gold · rated ${RD.rating(live.guild.threat)}</span></div>
-        <button type="button" class="go" id="resume" data-focus>Resume</button>
+        <button type="button" class="go" id="resume" ${chal ? '' : 'data-focus'}>Resume</button>
       </div>` : ''}
       <h2 id="sheet-title">The Reverse Dungeon</h2>
       <p class="lede">You are the dungeon. Build traps and monsters, then watch heroes try to steal your gold. Survivors tell the guild what they saw, so kill them before they get out.</p>
       <form id="seedform">
         <div class="playrow">
-          <button type="submit" class="${live ? 'ghost' : 'go big'}" ${live ? '' : 'data-focus'}>${live ? 'New dungeon' : 'Play'}</button>
-          <button type="button" class="ghost daily-btn" id="daily">Daily dungeon${dailyBest ? ` · best ${dailyBest}` : ''}</button>
+          <button type="submit" class="${live || chal ? 'ghost' : 'go big'}" ${live || chal ? '' : 'data-focus'}>${live ? 'New dungeon' : 'Play'}</button>
+          <button type="button" class="ghost daily-btn" id="daily" title="${esc(dTw.map((k) => RD.TWISTS[k].name + ': ' + RD.TWISTS[k].desc).join('  '))}">Daily: ${esc(dTw.map((k) => RD.TWISTS[k].name).join(' + '))}${dailyBest ? ` · best ${dailyBest}` : ''}</button>
+          <button type="button" class="ghost" id="heart-btn">Dungeon Heart · ${m.souls} souls</button>
           <button type="button" class="ghost" id="trophies">Trophies ${got}/${Object.keys(RD.TROPHIES).length}</button>
         </div>
         <p class="note" id="summary">${esc(summary())}${live ? ' · replaces your saved dungeon' : ''}</p>
+        ${m.streak > 1 ? `<p class="note streak">Day ${m.streak} in a row${m.gift === day ? '' : ` · your first dungeon today brings ${Math.min(20, 2 * m.streak)} souls`}</p>` : ''}
         <details class="more">
-          <summary>Mode, difficulty, pact and seed</summary>
+          <summary>Mode, difficulty, pact, twists and seed</summary>
           <h3>Mode</h3><div class="diffs" role="radiogroup">${modes}</div>
           <h3>Difficulty</h3><div class="diffs" role="radiogroup">${diffs}</div>
           <h3>Dark pact</h3><div class="diffs" role="radiogroup">${pacts}</div>
+          <h3>Twists · each adds 15% to your score</h3><div class="diffs">${twists}</div>
           <div class="seedrow">
             <label for="seed">Seed</label>
             <input id="seed" name="seed" inputmode="numeric" value="${seed}" autocomplete="off">
@@ -596,30 +655,81 @@
         for (const l of s.querySelectorAll('.diff')) l.classList.toggle('on', l.querySelector('input').checked);
         s.querySelector('#summary').textContent = summary() + (live ? ' · replaces your saved dungeon' : '');
       };
-      for (const inp of s.querySelectorAll('input[type=radio]')) inp.onchange = () => {
+      const savePrefs = () => store.set('prefs', { mode: ui.mode, diff: ui.diff, pact: ui.pact, twists: ui.twists });
+      for (const inp of s.querySelectorAll('input[type=radio], input[type=checkbox]')) inp.onchange = () => {
         if (inp.name === 'mode') ui.mode = inp.value;
         if (inp.name === 'diff') ui.diff = inp.value;
         if (inp.name === 'pact') ui.pact = inp.value || null;
-        store.set('prefs', { mode: ui.mode, diff: ui.diff, pact: ui.pact });
+        if (inp.name === 'twist') ui.twists = [...s.querySelectorAll('input[name=twist]:checked')].map((x) => x.value);
+        savePrefs();
         refresh();
       };
       s.querySelector('#reroll').onclick = () => { s.querySelector('#seed').value = (Math.random() * 1e6) | 0; };
       s.querySelector('#trophies').onclick = () => showTrophies();
-      const begin = (seedV, mode, diff) => {
-        newGame(seedV, null, diff, mode, ui.pact);
+      s.querySelector('#heart-btn').onclick = () => showHeart();
+      const begin = (seedV, mode, diff, tw) => {
+        newGame(seedV, null, diff, mode, ui.pact, tw);
         if (mode === 'daily') G.daily = day;
+        const gift = claimGift();
         save();
         closeModal();
         if (store.get('tut', null) !== 'done') tutorial('start');
         else announce();
+        if (gift) setTimeout(() => toast(`Day ${meta().streak} streak: +${gift} souls for the Dungeon Heart.`, true), 3300);
       };
-      s.querySelector('#daily').onclick = () => begin(seedOf('rd-daily-' + day), 'daily', 'normal');
+      s.querySelector('#daily').onclick = () => begin(seedOf('rd-daily-' + day), 'daily', 'normal', dTw);
+      const acc = s.querySelector('#accept');
+      if (acc) acc.onclick = () => { ui.challenge = null; begin(chal.seed, chal.mode, chal.diff, chal.twists); };
       s.querySelector('#seedform').onsubmit = (e) => {
         e.preventDefault();
         const v = parseInt(s.querySelector('#seed').value, 10);
-        begin(Number.isFinite(v) ? v : (Math.random() * 1e6) | 0, ui.mode, ui.diff);
+        begin(Number.isFinite(v) ? v : (Math.random() * 1e6) | 0, ui.mode, ui.diff, ui.twists.slice());
       };
     });
+  }
+
+  // permanent upgrades bought with souls
+  function showHeart() {
+    const m = meta();
+    const rows = Object.entries(RD.HEART).map(([k, h]) => {
+      const lv = m.heart[k] || 0;
+      const cost = h.costs[lv];
+      return `<li><div><b>${esc(h.name)}</b> <span class="lv">${'●'.repeat(lv)}${'○'.repeat(h.costs.length - lv)}</span><span>${esc(h.desc)}</span></div>
+        ${cost == null ? '<em>Full</em>' : `<button type="button" class="ghost small" data-k="${k}"${m.souls < cost ? ' disabled' : ''}>${cost} souls</button>`}</li>`;
+    }).join('');
+    openModal(`
+      <p class="eyebrow">Permanent · bought with souls</p>
+      <h2 id="sheet-title">The Dungeon Heart</h2>
+      <p class="lede">Every dungeon you run feeds the Heart. You have <b class="soulcount">${m.souls}</b> souls. Earn more from your score, from nemeses, and from playing on consecutive days. Upgrades apply to new dungeons.</p>
+      <ul class="heart">${rows}</ul>
+      <div class="seedrow"><button type="button" class="go" id="back" data-focus>Back</button></div>`, (s) => {
+      for (const b of s.querySelectorAll('[data-k]')) b.onclick = () => {
+        const mm = meta(), k = b.dataset.k, lv = mm.heart[k] || 0, cost = RD.HEART[k].costs[lv];
+        if (cost == null || mm.souls < cost) return;
+        mm.souls -= cost;
+        mm.heart[k] = lv + 1;
+        store.set('meta', mm);
+        sfx('level');
+        showHeart();
+      };
+      s.querySelector('#back').onclick = () => showIntro();
+    });
+  }
+
+  // a link that starts a friend on this exact dungeon: same seed, mode, difficulty and twists
+  function shareChallenge(score) {
+    const url = P.inviteLink({ seed: G.seed, mode: G.mode, diff: G.diff, twists: (G.twists || []).join('.'), score: score || 0 });
+    const done = () => toast('Challenge link copied. Send it to a friend.', true);
+    const fallback = () => { window.prompt('Copy this link and send it to a friend:', url); };
+    try { navigator.clipboard.writeText(url).then(done, fallback); } catch (e) { fallback(); }
+  }
+  function readChallenge() {
+    const seed = parseInt(P.inviteParam('seed'), 10);
+    if (!Number.isFinite(seed)) return null;
+    const mode = RD.MODES[P.inviteParam('mode')] ? P.inviteParam('mode') : 'quick';
+    const diff = RD.DIFF[P.inviteParam('diff')] ? P.inviteParam('diff') : 'normal';
+    const twists = (P.inviteParam('twists') || '').split('.').filter((k) => RD.TWISTS[k]);
+    return { seed, mode: mode === 'daily' ? 'quick' : mode, diff, twists, score: parseInt(P.inviteParam('score'), 10) || 0 };
   }
 
   function showTrophies() {
@@ -637,7 +747,7 @@
     });
   }
 
-  const heroLi = (h, cls, extra) => `<li class="${cls}${h.title ? ' legend' : ''}">${tierTag(h.tier)} ${esc(h.name)}${h.title ? ` <em>${esc(h.title)}</em>` : ''} · ${RD.CLASSES[h.cls].name}${extra || ''}</li>`;
+  const heroLi = (h, cls, extra) => `<li class="${cls}${h.title ? ' legend' : ''}">${tierTag(h.tier)} ${h.nemesis ? '<span class="chip wanted">Nemesis</span> ' : ''}${esc(h.name)}${h.title ? ` <em>${esc(h.title)}</em>` : ''} · ${RD.CLASSES[h.cls].name}${extra || ''}</li>`;
 
   function showDebrief() {
     const d = G.debrief;
@@ -662,7 +772,7 @@
     let scoreLine = '';
     if (over || G.result === 'won') {
       const rec = revive ? { score: RD.score(G) } : G.runRecord || (G.runRecord = recordRun());
-      scoreLine = `<p class="score">Score <b>${rec.score}</b>${rec.isBest ? ' · new best' : rec.best ? ` · best ${rec.best}` : ''}${G.mode === 'daily' ? ` · daily dungeon ${esc(G.daily || '')}` : ''}</p>`;
+      scoreLine = `<p class="score">Score <b>${rec.score}</b>${rec.isBest ? ' · new best' : rec.best ? ` · best ${rec.best}` : ''}${rec.souls ? ` · +${rec.souls} souls` : ''}${G.mode === 'daily' ? ` · daily dungeon ${esc(G.daily || '')}` : ''}</p>`;
     }
     const a = RD.assess(G);
     openModal(`
@@ -685,7 +795,10 @@
       <div class="seedrow">
         ${revive ? '<button type="button" class="go plain pair" id="again" data-focus>Accept defeat</button><button type="button" class="go rewarded pair" id="revive">🎬 Second chance: refill the hoard</button>' : over ? `<button type="button" class="go" id="again" data-focus>Wake a new dungeon</button>${G.result === 'won' ? '<button type="button" class="ghost" id="endless">Keep going (endless)</button>' : ''}` : `<button type="button" class="go" id="next" data-focus>Prepare the next night</button>`}
         <button type="button" class="ghost" id="log-btn">Full raid log</button>
+        ${over ? '<button type="button" class="ghost" id="challenge">Challenge a friend</button>' : ''}
       </div>`, (s) => {
+      const ch = s.querySelector('#challenge');
+      if (ch) ch.onclick = () => shareChallenge(RD.score(G));
       countUp(s);
       const go = (ad) => {
         const next = () => { RD.nextNight(G); save(); RD.FX.floaters.length = RD.FX.parts.length = RD.FX.bubbles.length = 0; closeModal(); renderAll(); announce(); };
@@ -817,8 +930,8 @@
   }
 
   // ---------------------------------------------------------------- setup
-  function newGame(seed, loaded, diff, mode, pact) {
-    G = loaded || RD.newGame(seed, diff, mode, pact);
+  function newGame(seed, loaded, diff, mode, pact, twists) {
+    G = loaded || RD.newGame(seed, diff, mode, pact, { twists: twists || [], heart: meta().heart });
     ui.tool = 'spikes';
     ui.carry = null;
     ui.power = null;
@@ -890,13 +1003,13 @@
     // touch: the first tap shows what would happen (details, range, outline), the second tap does it
     cv.addEventListener('click', (e) => {
       const i = canvasTile(e);
-      const aiming = G.phase === 'build' || (G.phase === 'raid' && ui.power === 'tremor');
+      const aiming = G.phase === 'build' || (G.phase === 'raid' && !!ui.power);
       if (ui.touch && aiming && i >= 0 && ui.armed !== i) {
         ui.armed = i;
         RD.view.hover = i;
         ui.hoverIt = null;
         preview(i);
-        if (G.phase === 'raid') toast('Tap again to strike here.', true);
+        if (G.phase === 'raid') toast(`Tap again to use ${RD.POWERS[ui.power].name} here.`, true);
         return;
       }
       ui.armed = -1;
@@ -1029,6 +1142,9 @@
     ui.diff = (prefs && prefs.diff) || store.get('diff', null) || (store.get('best', null) ? 'normal' : 'easy');
     ui.mode = (prefs && RD.MODES[prefs.mode] && prefs.mode !== 'daily' && prefs.mode) || 'campaign';
     ui.pact = (prefs && prefs.pact && RD.PACTS[prefs.pact] && has(RD.PACTS[prefs.pact].trophy) && prefs.pact) || null;
+    ui.twists = ((prefs && prefs.twists) || []).filter((k) => RD.TWISTS[k]);
+    ui.challenge = readChallenge();
+    touchStreak();
     let loaded = null;
     try { loaded = RD.loadGame(store.get('save', null)); } catch (e) { loaded = null; }
     if (!loaded) store.del('save');

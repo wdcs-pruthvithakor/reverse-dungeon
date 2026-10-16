@@ -657,3 +657,26 @@ kbd {
 }
 .zoom button:hover { border-color: var(--ash); }
 .zoom button[disabled] { opacity: 0.35; cursor: default; }
+
+/* raid powers: seven of them, so names give way to icons on small screens */
+.power.locked { opacity: 0.5; }
+.power.locked .cost { color: var(--ash); font-size: var(--s-xs); }
+@media (max-width: 1300px), (max-height: 560px) {
+  .power .pname { display: none; }
+  .power { padding: 3px 8px 3px 3px; gap: 4px; }
+}
+
+/* retention: twists, nemeses, the heart, streaks, challenges */
+.omen .twist { color: var(--violet, #b38be0); font-size: var(--s-sm); border: 1px solid #4a3a66; padding: 0 6px; }
+.chip.wanted { color: #ffd34d; border-color: #8a6a12; background: rgba(227, 176, 75, 0.12); }
+.streak { color: var(--gold); }
+.challenge { border-color: var(--malice); }
+.challenge b { color: var(--malice-hi); }
+.heart { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.heart li { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--rule); background: var(--void); padding: 8px 10px; }
+.heart li span { display: block; color: var(--ash); font-size: var(--s-xs); }
+.heart li .lv { display: inline; color: var(--gold); font-family: var(--f-mono); letter-spacing: 0.15em; margin-left: 6px; }
+.heart li em { color: var(--gold); font-style: normal; font-size: var(--s-sm); }
+.heart .ghost.small { margin-top: 0; white-space: nowrap; }
+.heart .ghost.small[disabled] { opacity: 0.45; cursor: not-allowed; }
+.soulcount { color: var(--gold); }

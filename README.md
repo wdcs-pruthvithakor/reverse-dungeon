@@ -14,9 +14,13 @@ New players get a one-click start on Apprentice and a guided first night (place 
 
 - **Campaign** is the full climb: hold 20–30 nights depending on difficulty.
 - **Quick** is 12 nights in which everything (ranks, floors, guild strength, income) moves 2.2× faster, so a 15–25 minute run still reaches bosses and the Demon Lord.
-- **Daily dungeon** uses Quick rules on Keeper with a seed taken from today's date, so everyone gets the same dungeon. Your best score for each day is kept.
+- **Daily dungeon** uses Quick rules on Keeper with a seed taken from today's date, plus two **twists** rolled for the day, so everyone gets the same unusual dungeon. Your best score for each day is kept.
+- **Twists** change one run's rules (Gold Fever, Swarm, Burned Archive, Sending Stones, Buyer's Market, Age of Thrones, Endless Night, Age of Legends, Glass Fangs, Rush). Pick any for Campaign or Quick; each adds 15% to the score.
+- **Challenge a friend** from the final screen: the link starts them on your exact seed, mode, difficulty and twists, with your score to beat. On CrazyGames it uses the SDK's invite link.
 - Every run ends with a **score** (nights held, heroes slain, legends, and a bonus for winning), and the best is kept per mode and difficulty.
-- **18 trophies** carry across every dungeon. Seven of them unlock a **Dark Pact**, a perk you can take into a new run: more starting malice or gold, cheaper monsters or bosses, tougher doors and faster traps, four nightly deals, or fewer Sending Stones.
+- **Souls** are earned from every run's score (and from nemeses) and spent in the **Dungeon Heart** on permanent upgrades: more starting malice or gold, faster power recharge, cheaper rerolls, bigger nemesis bounties, cheaper floors. Playing on consecutive days builds a **streak**, and the first dungeon of each day pays souls.
+- **Nemeses:** a hero who escapes you twice becomes a nemesis. They always come back, a little stronger, and killing one pays a triple bounty.
+- **21 trophies** carry across every dungeon. Seven of them unlock a **Dark Pact**, a perk you can take into a new run: more starting malice or gold, cheaper monsters or bosses, tougher doors and faster traps, four nightly deals, or fewer Sending Stones.
 
 ## How a night works
 
@@ -72,7 +76,21 @@ Balance was tuned with headless bot games. A bot that builds kill zones, re-trap
 | `[` `]` | Previous / next floor |
 | `1` `2` `4` | Raid speed |
 
-During a raid, **Tremor** knocks down heroes around a tile, and **Douse** snuffs every torch so heroes can't spot traps. Heroes call out what is happening in speech bubbles, and a small eye marks every trap the party already knows about.
+### Raid powers
+
+Powers open as the run goes on (Quick runs reach them sooner), and cost more malice as your ranks rise.
+
+| Power | Opens | What it does |
+|---|---|---|
+| Tremor | night 1 | Knocks down heroes around a tile |
+| Douse | night 1 | Snuffs every torch: heroes see one tile and can't spot traps |
+| Phantom Gold | night 3 | A false hoard that heroes still hunting for gold walk to |
+| Cave-in | night 5 | Blocks a corridor tile for 8s |
+| Bloodlust | night 8 | Monsters hit harder, attack faster and run faster for 7s |
+| Raise the Dead | night 11 | Two skeletons appear where you click |
+| Seal the Gate | night 14 | Nobody can leave for 6s, so nobody reports |
+
+Monsters guard their posts, but run down anyone fleeing or carrying gold (fast monsters furthest; bosses never leave their lair). If you look at another floor during a raid, the view returns to the heroes after a few seconds. Heroes call out what is happening in speech bubbles, and a small eye marks every trap the party already knows about.
 
 ## Web portals
 

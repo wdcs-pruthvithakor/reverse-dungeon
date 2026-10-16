@@ -68,6 +68,20 @@
   // an optional ad the player chose; the reward is granted only when it finished
   P.rewarded = (done) => ad('rewarded', (ok) => done(ok));
 
+  // Challenge links. On CrazyGames the SDK builds a link to the game's own page with these params;
+  // elsewhere it is this page's address with a query string.
+  P.inviteLink = function (params) {
+    try { if (live() && sdk.game.inviteLink) return sdk.game.inviteLink(params); } catch (e) { /* fall through */ }
+    const u = new URL(location.href);
+    u.search = '';
+    for (const k in params) u.searchParams.set(k, params[k]);
+    return u.toString();
+  };
+  P.inviteParam = function (name) {
+    try { if (live() && sdk.game.getInviteParam) { const v = sdk.game.getInviteParam(name); if (v != null) return v; } } catch (e) { /* fall through */ }
+    return new URLSearchParams(location.search).get(name);
+  };
+
   // Saves: CrazyGames' data module syncs to the player's account; otherwise localStorage.
   P.storage = function () {
     try { if (live() && sdk.data) return sdk.data; } catch (e) { /* fall through */ }

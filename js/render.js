@@ -583,6 +583,35 @@
         c.beginPath(); c.moveTo(-s * 0.35, 0); c.lineTo(-s * 0.18, -s * 0.2); c.lineTo(-s * 0.02, s * 0.18); c.lineTo(s * 0.14, -s * 0.22); c.lineTo(s * 0.35, 0.05 * s); c.stroke();
         break;
       }
+      case 'lure': coins(c, s, 40); c.strokeStyle = 'rgba(179,139,224,0.8)'; c.setLineDash([s * 0.06, s * 0.06]); c.beginPath(); c.arc(0, 0, s * 0.34, 0, Math.PI * 2); c.stroke(); break;
+      case 'collapse': {
+        c.fillStyle = P.rockFace;
+        for (const [x, y, r] of [[-0.18, 0.18, 0.13], [0.06, 0.2, 0.15], [0.22, 0.1, 0.1], [-0.04, -0.02, 0.12]]) { c.beginPath(); c.arc(x * s, y * s, r * s, 0, Math.PI * 2); c.fill(); }
+        c.strokeStyle = P.bone; c.lineWidth = lw * 1.4;
+        c.beginPath(); c.moveTo(-s * 0.1, -s * 0.36); c.lineTo(-s * 0.1, -s * 0.18); c.moveTo(s * 0.12, -s * 0.4); c.lineTo(s * 0.12, -s * 0.2); c.stroke();
+        break;
+      }
+      case 'frenzy': {
+        c.fillStyle = P.malice;
+        c.beginPath(); c.moveTo(0, -s * 0.34); c.quadraticCurveTo(s * 0.3, -s * 0.02, 0, s * 0.32); c.quadraticCurveTo(-s * 0.3, -s * 0.02, 0, -s * 0.34); c.fill();
+        c.fillStyle = P.maliceHi; c.beginPath(); c.arc(-s * 0.06, s * 0.06, s * 0.07, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'raise': {
+        c.fillStyle = P.bone;
+        c.beginPath(); c.arc(0, -s * 0.12, s * 0.16, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#1a141d'; c.beginPath(); c.arc(-s * 0.06, -s * 0.13, s * 0.04, 0, Math.PI * 2); c.arc(s * 0.06, -s * 0.13, s * 0.04, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = P.rockRim; c.lineWidth = lw * 1.6; c.beginPath(); c.moveTo(-s * 0.36, s * 0.22); c.lineTo(s * 0.36, s * 0.22); c.stroke();
+        c.strokeStyle = P.bone; c.lineWidth = lw * 1.2; c.beginPath(); c.moveTo(-s * 0.2, s * 0.2); c.lineTo(-s * 0.26, s * 0.02); c.moveTo(s * 0.2, s * 0.2); c.lineTo(s * 0.26, s * 0.02); c.stroke();
+        break;
+      }
+      case 'seal': {
+        c.fillStyle = '#3c3742'; rr(c, -s * 0.3, -s * 0.34, s * 0.6, s * 0.68, s * 0.05); c.fill();
+        c.strokeStyle = P.gold; c.lineWidth = lw * 1.6;
+        for (let k = -1; k <= 1; k++) { c.beginPath(); c.moveTo(k * s * 0.15, -s * 0.3); c.lineTo(k * s * 0.15, s * 0.3); c.stroke(); }
+        c.beginPath(); c.moveTo(-s * 0.3, 0); c.lineTo(s * 0.3, 0); c.stroke();
+        break;
+      }
       case 'douse': {
         c.fillStyle = P.ash;
         c.fillRect(-s * 0.04, -s * 0.02, s * 0.08, s * 0.32);
@@ -832,6 +861,15 @@
       if (G.phase === 'build') badge(c, cx, cy, T, d.tier, it.lv);
     }
 
+    if (R && R.lure && on(R.lure.tile)) {
+      const [cx, cy] = tc(R.lure.tile);
+      c.save(); c.globalAlpha = 0.6 + 0.3 * Math.sin(V.time * 6); c.translate(cx, cy); coins(c, T, 60); c.restore();
+    }
+    if (R && R.sealT > 0 && F === 0) {
+      const [gx, gy] = tc(G.entrance);
+      c.strokeStyle = P.gold; c.lineWidth = Math.max(2, T / 10);
+      for (let k = -1; k <= 1; k++) { c.beginPath(); c.moveTo(gx + k * T * 0.25, gy - T * 0.45); c.lineTo(gx + k * T * 0.25, gy + T * 0.45); c.stroke(); }
+    }
     if (R) for (const cl of R.clouds) {
       if (cl.f !== F) continue;
       const a = Math.min(1, cl.t / 0.6) * 0.45;
@@ -845,6 +883,7 @@
     if (R) for (const m of R.monsters) {
       if (m.dead || !on(m.tile)) continue;
       const lx = m.lunge > 0 ? (m.face || 1) * T * 0.08 : 0;
+      if (R.frenzyT > 0) { c.fillStyle = 'rgba(224,90,134,0.28)'; c.beginPath(); c.arc(m.x * T, m.y * T, T * 0.45, 0, Math.PI * 2); c.fill(); }
       RD.glyph(c, m.type, m.x * T + lx, m.y * T, T, { awake: !m.dormant });
       if (m.hp < m.maxHp) bar(c, m.x * T - T * 0.35, m.y * T - T * 0.55, T * 0.7, m.hp / m.maxHp, P.maliceHi);
       badge(c, m.x * T + lx, m.y * T, T, m.tier, m.lv);
@@ -967,12 +1006,13 @@
       const ghost = ui.carry != null ? G.items.get(ui.carry) && G.items.get(ui.carry).type : RD.ITEMS[ui.tool] ? ui.tool : ui.tool === 'hoard' ? 'hoard' : null;
       if (ghost && !err) RD.glyph(c, ghost, x * T + T / 2, y * T + T / 2, T, { alpha: 0.55 });
     }
-    if (hov >= 0 && G.phase === 'raid' && ui.power === 'tremor') {
+    if (hov >= 0 && G.phase === 'raid' && ui.power && RD.POWERS[ui.power].target) {
       const [cx, cy] = tc(hov);
       c.strokeStyle = P.maliceHi;
       c.setLineDash([4, 4]);
-      c.beginPath(); c.arc(cx, cy, T * 1.6, 0, Math.PI * 2); c.stroke();
+      c.beginPath(); c.arc(cx, cy, T * RD.POWERS[ui.power].radius, 0, Math.PI * 2); c.stroke();
       c.setLineDash([]);
+      RD.glyph(c, ui.power, cx, cy, T * 0.8, { alpha: 0.6 });
     }
 
     // what the party already knows: an eye on every hidden trap in their shared map

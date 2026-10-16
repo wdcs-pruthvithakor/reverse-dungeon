@@ -6,7 +6,7 @@
   RD.COLS = 17;
   RD.ROWS = 11;
   RD.N = RD.COLS * RD.ROWS;
-  RD.raidTime = (G) => 140 + 60 * G.floors; // deeper dungeons get longer nights
+  RD.raidTime = (G) => (140 + 60 * G.floors) * (G.twists && G.twists.includes('rush') ? 0.6 : 1); // deeper dungeons get longer nights
 
   // ---------------------------------------------------------------- seeded randomness
   RD.makeRng = function (seed) {
@@ -111,6 +111,9 @@
     win_hard: { name: 'Overlord', desc: 'Win on Overlord or Abyss.' },
     win_abyss: { name: 'The Abyss Gazes Back', desc: 'Win on Abyss.' },
     slay100: { name: 'Bone Pile', desc: 'Slay 100 heroes across all your dungeons.' },
+    nemesis: { name: 'Settled Grudge', desc: 'Slay a nemesis: a hero who escaped you twice.' },
+    twisted: { name: 'Twisted', desc: 'Win a run with three or more twists.' },
+    streak7: { name: 'Seven Nights’ Vigil', desc: 'Play on seven days in a row.' },
   };
   // A pact is a perk you take into a new dungeon. Each one is earned with a trophy.
   RD.PACTS = {
@@ -122,8 +125,36 @@
     wyrm: { name: 'Wyrm’s Debt', desc: 'Bosses cost 20% less.', trophy: 'boss' },
     silence: { name: 'Silence', desc: 'Sending Stones are half as common.', trophy: 'win_any' },
   };
-  // a run's score: nights held, heroes slain, legends, and a bonus for winning
-  RD.score = (G) => 20 * G.stats.held + 10 * G.stats.slain + 40 * G.stats.legends + (G.result === 'won' ? 250 + G.gold : 0);
+  // Twists change the rules of one run. The daily dungeon rolls two; Quick and Campaign runs can pick any.
+  // Every twist adds 15% to the run's score.
+  RD.TWISTS = {
+    greed: { name: 'Gold Fever', desc: 'Heroes carry off twice as much gold, and every kill pays double malice.' },
+    swarm: { name: 'Swarm', desc: 'Every party brings two extra heroes, all a rank lower.' },
+    blind: { name: 'Burned Archive', desc: 'The guild forgets your dungeon every night, but sends heroes half a rank stronger.' },
+    stones: { name: 'Sending Stones', desc: 'Every hero carries a sending stone.' },
+    cheap: { name: 'Buyer’s Market', desc: 'Everything costs 25% less, and income is 25% lower.' },
+    thrones: { name: 'Age of Thrones', desc: 'Bosses cost 40% less, and you start with 120 more malice.' },
+    dark: { name: 'Endless Night', desc: 'Every night is a Wet Torches night: heroes see one tile less.' },
+    legends: { name: 'Age of Legends', desc: 'Every party that can bring a legend does.' },
+    glass: { name: 'Glass Fangs', desc: 'Monsters hit 50% harder but have 30% less health.' },
+    rush: { name: 'Rush', desc: 'Raids are 40% shorter and heroes move 20% faster.' },
+  };
+  RD.twisted = (G, k) => !!(G.twists && G.twists.includes(k));
+
+  // a run's score: nights held, heroes slain, legends, and a bonus for winning; twists multiply it
+  RD.score = (G) => Math.round((20 * G.stats.held + 10 * G.stats.slain + 40 * G.stats.legends + 60 * (G.stats.nemeses || 0) + (G.result === 'won' ? 250 + G.gold : 0)) * (1 + 0.15 * (G.twists || []).length));
+  // souls: the currency that carries over, earned from every run's score
+  RD.souls = (G) => Math.round(RD.score(G) / 40) + 5 * (G.stats.nemeses || 0);
+
+  // The Dungeon Heart: permanent upgrades bought with souls, three levels each.
+  RD.HEART = {
+    reserves: { name: 'Dark Reserves', desc: '+25 starting malice per level.', costs: [20, 45, 80] },
+    vault: { name: 'Gilded Vault', desc: '+20 starting gold per level.', costs: [20, 45, 80] },
+    haste: { name: 'Quickened Will', desc: 'Raid powers recharge 10% faster per level.', costs: [30, 60, 100] },
+    ledger: { name: 'Black Ledger', desc: 'Rerolling tonight’s deals costs 4 less per level.', costs: [15, 35, 60] },
+    grudge: { name: 'Old Grudges', desc: 'Nemesis bounties pay 50% more malice per level.', costs: [25, 50, 90] },
+    delve: { name: 'Deep Delving', desc: 'New floors cost 15% less per level.', costs: [25, 50, 90] },
+  };
 
   // ---------------------------------------------------------------- what the dungeon can build
   // Stats are listed at rank F; a piece's real numbers are multiplied by its rank and level.
@@ -240,10 +271,19 @@
     sell: { name: 'Sell', cost: 0, desc: 'Remove a piece and get back 60% of everything spent on it.' },
   };
 
+  // Raid powers. `night` is the campaign night a power opens (Quick runs reach it sooner);
+  // `target` powers are aimed at a tile. Costs grow with the ranks you have unlocked.
   RD.POWERS = {
-    tremor: { name: 'Tremor', cost: 12, cd: 8, desc: 'Click a tile. Heroes within a tile of it are knocked down for 2s and lose 6% of their health.' },
-    douse: { name: 'Douse', cost: 10, cd: 20, desc: 'Snuff every torch for 8s. Heroes see one tile ahead, slow down and cannot spot traps.' },
+    tremor: { name: 'Tremor', cost: 12, cd: 8, night: 1, target: true, radius: 1.6, desc: 'Click a tile. Heroes within a tile of it are knocked down for 2s and lose 6% of their health.' },
+    douse: { name: 'Douse', cost: 10, cd: 20, night: 1, desc: 'Snuff every torch for 8s. Heroes see one tile ahead, slow down and cannot spot traps.' },
+    lure: { name: 'Phantom Gold', cost: 14, cd: 18, night: 3, target: true, radius: 0.6, desc: 'Click a corridor. A false hoard glitters there for 10s, and heroes still hunting for gold go to it instead.' },
+    collapse: { name: 'Cave-in', cost: 16, cd: 16, night: 5, target: true, radius: 0.5, desc: 'Click an empty corridor tile. The ceiling drops and blocks it for 8s. Heroes have to find another way.' },
+    frenzy: { name: 'Bloodlust', cost: 22, cd: 25, night: 8, desc: 'For 7s every monster hits 50% harder, attacks faster and runs 35% faster.' },
+    raise: { name: 'Raise the Dead', cost: 26, cd: 28, night: 11, target: true, radius: 1, desc: 'Click a corridor. Two skeletons claw out of the floor there and fight until dawn.' },
+    seal: { name: 'Seal the Gate', cost: 30, cd: 40, night: 14, desc: 'The front gate slams shut for 6s. Nobody leaves, so nobody reports.' },
   };
+  RD.powerOpen = (G, k) => RD.age(G) >= RD.POWERS[k].night;
+  RD.powerCost = (G, k) => Math.round(RD.POWERS[k].cost * (1 + 0.3 * RD.unlocked(G)));
 
   // ---------------------------------------------------------------- the heroes
   // Stats are at rank F. Unique classes are rare and only appear at `minTier` or above.

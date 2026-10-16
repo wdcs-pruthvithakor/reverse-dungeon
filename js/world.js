@@ -359,7 +359,8 @@
   RD.rating = (threat) => RD.TIERS[Math.max(0, Math.min(RD.MAX_TIER, Math.round(threat)))];
 
   // ---------------------------------------------------------------- game state
-  RD.newGame = function (seed, diff, mode, pact) {
+  RD.newGame = function (seed, diff, mode, pact, opts) {
+    opts = opts || {};
     mode = RD.MODES[mode] ? mode : 'campaign';
     if (RD.MODES[mode].diff) diff = RD.MODES[mode].diff;
     diff = RD.DIFF[diff] ? diff : 'normal';
@@ -369,7 +370,7 @@
     const tiles = new Uint8Array(NN);
     tiles.set(map.tiles, 0);
     const G = {
-      seed, rng, diff, mode, pact: pact || null,
+      seed, rng, diff, mode, pact: pact || null, twists: (opts.twists || []).filter((k) => RD.TWISTS[k]), heart: opts.heart || {},
       floors: 1, tiles, gates: [map.entrance], stairs: [], links: new Map(),
       entrance: map.entrance, hoard: map.hoard,
       items: new Map(),
@@ -382,9 +383,11 @@
         rumors: [],
       },
       party: [], omen: null, offers: [], sale: null, adapt: '',
-      stats: { slain: 0, escaped: 0, goldLost: 0, held: 0, legends: 0 },
+      stats: { slain: 0, escaped: 0, goldLost: 0, held: 0, legends: 0, nemeses: 0 },
       nextId: 1, history: [], debrief: null, R: null,
     };
+    G.malice += 25 * (G.heart.reserves || 0) + (RD.twisted(G, 'thrones') ? 120 : 0);
+    G.gold += 20 * (G.heart.vault || 0);
     if (G.pact === 'tithe') G.malice += 60;
     if (G.pact === 'purse') G.gold += 50;
     RD.G = G;
@@ -422,7 +425,7 @@
   RD.saveGame = function (G, pending) {
     const g = G.guild, M = G.floors * N;
     return {
-      v: 2, pending: !!pending, diff: G.diff, mode: G.mode, pact: G.pact, adReroll: G.adReroll,
+      v: 2, pending: !!pending, diff: G.diff, mode: G.mode, pact: G.pact, adReroll: G.adReroll, twists: G.twists, heart: G.heart, daily: G.daily,
       seed: G.seed, rng: G.rng.state(),
       floors: G.floors, tiles: Array.from(G.tiles.subarray(0, M)), gates: G.gates, stairs: G.stairs,
       entrance: G.entrance, hoard: G.hoard,
@@ -449,14 +452,14 @@
     const tiles = new Uint8Array(NN);
     tiles.set(Uint8Array.from(o.tiles), 0);
     const G = {
-      seed: o.seed, rng, diff: RD.DIFF[o.diff] ? o.diff : 'normal', mode: RD.MODES[o.mode] ? o.mode : 'campaign', pact: o.pact || null, adReroll: o.adReroll,
+      seed: o.seed, rng, diff: RD.DIFF[o.diff] ? o.diff : 'normal', mode: RD.MODES[o.mode] ? o.mode : 'campaign', pact: o.pact || null, adReroll: o.adReroll, twists: o.twists || [], heart: o.heart || {}, daily: o.daily,
       floors: o.floors || 1, tiles, gates: o.gates || [o.entrance], stairs: o.stairs || [], links: new Map(),
       entrance: o.entrance, hoard: o.hoard,
       items, malice: o.malice, gold: o.gold, raid: o.raid, phase: 'build', endless: o.endless,
       guild: { pressure: 0, threat: 0, wariness: 0, blackout: 0, renown: 0, ...o.guild, K: unpackKnow(o.guild.K) },
       party: o.party, omen: RD.OMENS.find((m) => m.id === o.omen) || RD.OMENS[0],
       offers: (o.offers || []).filter((t) => RD.ITEMS[t]), sale: o.sale, adapt: o.adapt,
-      stats: { ...o.stats, legends: o.stats.legends || 0 }, nextId: o.nextId, history: o.history || [], debrief: null, R: null,
+      stats: { ...o.stats, legends: o.stats.legends || 0, nemeses: o.stats.nemeses || 0 }, nextId: o.nextId, history: o.history || [], debrief: null, R: null,
     };
     linkFloors(G);
     RD.G = G;
@@ -488,6 +491,7 @@
       if (G.omen.id === 'tithe') G.malice += 30;
       if (G.omen.id === 'leak') RD.leakSurvey(G, 8);
     }
+    if (!first && !keepOmen && RD.twisted(G, 'blind')) G.guild.K = RD.newKnow();
     const a = RD.assess(G);
     G.guild.threat = a.threat;
     G.party = RD.genParty(G, a);
@@ -495,7 +499,8 @@
 
   // New deals for tonight. The UI charges malice for it, or offers it after an optional ad.
   RD.dealCount = (G) => (G.pact === 'market' ? 4 : 3);
-  RD.rerollCost = (G) => (G.pact === 'market' ? 5 : 15);
+  RD.rerollCost = (G) => Math.max(1, (G.pact === 'market' ? 5 : 15) - 4 * (G.heart.ledger || 0));
+  RD.floorCost = (G) => Math.round(RD.FLOOR_COST[G.floors] * (1 - 0.15 * (G.heart.delve || 0)));
   RD.rerollDeals = function (G) {
     const top = RD.unlocked(G);
     const pool = Object.keys(RD.ITEMS).filter((k) => !RD.ITEMS[k].summonOnly && RD.ITEMS[k].tier <= top);
@@ -510,6 +515,8 @@
     if (G.pact === 'bones' && d.kind === 'monster' && !d.boss) c *= 0.85;
     if (G.pact === 'wyrm' && d.boss) c *= 0.8;
     if (G.offers.includes(type) || G.sale === type) c *= 0.7;
+    if (RD.twisted(G, 'cheap')) c *= 0.75;
+    if (RD.twisted(G, 'thrones') && d.boss) c *= 0.6;
     return Math.round(c);
   };
 
@@ -546,7 +553,7 @@
     if (G.floors >= MAX_FLOORS) return 'The dungeon is as deep as it goes.';
     const night = RD.FLOOR_UNLOCK[G.floors];
     if (RD.age(G) < night) return `Floor ${RD.ROMAN[G.floors]} can be dug from night ${RD.floorNight(G, G.floors)}.`;
-    const c = RD.FLOOR_COST[G.floors];
+    const c = RD.floorCost(G);
     if (G.malice < c) return `Needs ${c} malice. You have ${G.malice}.`;
     return null;
   };
@@ -571,7 +578,7 @@
       if (u !== from && !G.items.has(u) && !G.links.has(u) && d > bd) { bd = d; best = u; }
       for (const v of NB[u]) if (dist[v - above * N] < 0 && G.tiles[v] === 1) { dist[v - above * N] = d + 1; q.push(v); }
     }
-    G.malice -= RD.FLOOR_COST[f];
+    G.malice -= RD.floorCost(G);
     G.stairs[above] = best % N;
     G.gates[f] = map.entrance;
     G.floors++;
@@ -746,18 +753,21 @@
     const rng = G.rng;
     const lvl = vet ? vet.lvl : 1;
     const traits = vet ? vet.traits.slice() : rollTraits(rng, G.guild.blackout);
+    if (RD.twisted(G, 'stones') && !traits.includes('stone')) traits.push('stone');
     const has = (t) => traits.includes(t);
     // ranks run out at SSS; after night 15 adventurers keep getting better gear and training
     const era = 1 + D.growth * Math.max(0, RD.age(G) - 15);
     const grace = G.raid === 1 ? 0.65 : Math.min(1, 0.8 + 0.05 * G.raid); // the first few parties are green
-    const scale = RD.TIER_MULT[tier] * D.hero * (1 + 0.1 * (lvl - 1)) * era * grace * (1 + (G.guild.renown || 0));
+    const nemesis = !!(vet && vet.nemesis);
+    const scale = RD.TIER_MULT[tier] * D.hero * (1 + 0.1 * (lvl - 1)) * era * grace * (1 + (G.guild.renown || 0)) * (nemesis ? 1.15 : 1);
     const h = {
       id: G.nextId++,
       name: vet ? vet.name : heroName(rng, used),
       title: C.unique ? RD.TITLES[cls] : '',
       cls, tier, lvl, traits,
       maxHp: Math.round(C.hp * scale * (has('stout') ? 1.25 : 1)),
-      speed: C.speed * (has('swift') ? 1.2 : 1),
+      speed: C.speed * (has('swift') ? 1.2 : 1) * (RD.twisted(G, 'rush') ? 1.2 : 1),
+      nemesis, escapes: vet ? vet.escapes || 0 : 0,
       dmg: C.dmg * scale,
       rate: C.rate, range: C.range, vision: C.vision,
       brave: C.brave + (has('reckless') ? 0.3 : 0),
@@ -791,12 +801,13 @@
     a = a || RD.assess(G);
     const top = RD.unlocked(G);
     const cap = Math.min(8, top + 1);
-    const T = Math.min(cap, a.threat);
+    const T = Math.max(0, Math.min(cap + (RD.twisted(G, 'blind') ? 0.6 : 0), a.threat + (RD.twisted(G, 'blind') ? 0.6 : 0)) - (RD.twisted(G, 'swarm') ? 1 : 0));
     const age = RD.age(G);
     let n = 3 + Math.floor((age - 1) / 5) + (age > 5 ? D.party : 0) + (gu.blackout >= 2 ? 1 : 0);
     n = Math.max(2, Math.min(10, n));
     if (G.raid === 1) n = Math.max(2, n - 1);
     if (G.omen.id === 'bounty') n++;
+    if (RD.twisted(G, 'swarm')) n += 2;
     const roll = () => Math.max(0, Math.min(cap, Math.round(T) + +rng.weighted({ '-1': 0.3, 0: 0.58, 1: 0.12 })));
     const c = gu.causes;
     const used = new Set();
@@ -842,7 +853,7 @@
     // veterans who earned their return
     for (const v of rng.shuffle(gu.veterans.slice())) {
       if (party.length >= n - 1) break;
-      if (rng.chance(0.65)) {
+      if (v.nemesis || rng.chance(0.65)) {
         hire(v.cls, Math.min(cap, v.tier || 0), v);
         gu.veterans.splice(gu.veterans.indexOf(v), 1);
       }
@@ -875,7 +886,7 @@
       w.cleric += c.monster * 0.3;
       w.scout += (1 - RD.coverage(G, K)) * 2 + (gu.wariness || 0) * 2;
       let cls = rng.weighted(w);
-      if (!legend && rng.chance(0.045 * D.rare * (1 + 0.2 * t))) {
+      if (!legend && (RD.twisted(G, 'legends') || rng.chance(0.045 * D.rare * (1 + 0.2 * t)))) {
         const pool = {};
         for (const u of RD.UNIQUE) if (u !== 'chosen' && canBe(u, t)) pool[u] = RD.CLASSES[u].w;
         if (Object.keys(pool).length) cls = rng.weighted(pool);

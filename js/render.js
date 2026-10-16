@@ -13,11 +13,14 @@
     venom: '#86c06a', fire: '#ff8a3d', violet: '#b38be0', iron: '#5b5562', frost: '#cfe9ff',
     hero: {
       knight: '#d6dde8', rogue: '#7fbca6', mage: '#98a4f4', cleric: '#f0d9a0', scout: '#9fd2e9',
-      paladin: '#ffe6a3', swordsaint: '#f4f4f4', shadow: '#6a6f8a', archmage: '#c9a8ff', saint: '#fff3cf', chosen: '#ffd34d',
+      ranger: '#9bc47a', berserker: '#e08a6a', alchemist: '#7fd6c2', bard: '#e7a8d8',
+      monk: '#e8b070', tamer: '#a8d48a', ninja: '#5a5f78', samurai: '#d86a5a', darkknight: '#6a4a8a',
+      shieldhero: '#c8d8e8', goblinslayer: '#9a9080', phantomthief: '#2a2a3a', sage: '#b8e0f0',
+      paladin: '#ffe6a3', swordsaint: '#f4f4f4', shadow: '#6a6f8a', archmage: '#c9a8ff', saint: '#fff3cf', dragonslayer: '#ff9a5c', chosen: '#ffd34d',
     },
   });
 
-  const V = (RD.view = { canvas: null, ctx: null, T: 32, M: 18, dpr: 1, hover: -1, guildMap: false, staticC: null, dirty: true, time: 0, floor: 0, drawn: -1 });
+  const V = (RD.view = { canvas: null, ctx: null, T: 32, M: 18, dpr: 1, hover: -1, guildMap: false, staticC: null, dirty: true, time: 0, floor: 0, drawn: -1, marks: [] });
 
   RD.initRender = function (canvas) {
     V.canvas = canvas;
@@ -61,7 +64,7 @@
     c.fillRect(0, 0, V.w, V.h);
     c.translate(M, M);
     // deeper floors are colder and darker
-    const deep = f * 0.06;
+    const deep = Math.min(f, 6) * 0.06;
     for (let i = 0; i < N; i++) {
       const g = base + i;
       const [x, y] = xy(g);
@@ -123,6 +126,8 @@
         }
         if (x > 0 && G.tiles[g - 1] === 0) { c.fillStyle = 'rgba(10,8,12,0.3)'; c.fillRect(px, py, T * 0.12, T); }
         if (deep) { c.fillStyle = `rgba(20,24,46,${deep})`; c.fillRect(px, py, T, T); }
+        const tint = RD.themeOf(G, g).tint;
+        if (tint) { c.fillStyle = tint; c.fillRect(px, py, T, T); }
       }
     }
     if (f === 0) {
@@ -347,6 +352,7 @@
         break;
       }
       case 'pylon': {
+        if (o.off) c.globalAlpha *= 0.4; // jammed
         c.fillStyle = '#20283a';
         c.beginPath(); c.moveTo(0, -s * 0.38); c.lineTo(s * 0.2, 0); c.lineTo(0, s * 0.38); c.lineTo(-s * 0.2, 0); c.closePath(); c.fill();
         c.strokeStyle = '#bfe0ff';
@@ -512,6 +518,92 @@
         eyes(k * 0.06, -k * 0.15, k * 0.03, `rgba(255,90,40,${flick})`);
         break;
       }
+      // ------------------------------------------------ new traps
+      case 'poison': {
+        c.fillStyle = '#17121a'; rr(c, -s * 0.3, -s * 0.3, s * 0.6, s * 0.6, s * 0.06); c.fill();
+        c.strokeStyle = o.off ? P.iron : P.venom; c.lineWidth = lw * 1.2;
+        for (const [x, y] of [[-0.12, -0.1], [0.1, 0.06], [-0.04, 0.14], [0.14, -0.14]]) { c.beginPath(); c.moveTo(x * s, y * s + s * 0.06); c.lineTo(x * s, y * s - s * 0.08); c.stroke(); }
+        c.fillStyle = o.off ? P.iron : P.venom; c.beginPath(); c.arc(0, 0, s * 0.05, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'alarm': {
+        c.fillStyle = o.off ? P.iron : P.gold;
+        c.beginPath(); c.moveTo(-s * 0.22, s * 0.16); c.quadraticCurveTo(-s * 0.22, -s * 0.28, 0, -s * 0.28); c.quadraticCurveTo(s * 0.22, -s * 0.28, s * 0.22, s * 0.16); c.closePath(); c.fill();
+        c.fillRect(-s * 0.28, s * 0.14, s * 0.56, s * 0.06);
+        c.fillStyle = '#3a2a10'; c.beginPath(); c.arc(0, s * 0.24, s * 0.05, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'cage': {
+        c.strokeStyle = o.off ? P.iron : '#a59cad'; c.lineWidth = lw * 1.4;
+        rr(c, -s * 0.32, -s * 0.32, s * 0.64, s * 0.64, s * 0.04); c.stroke();
+        for (let k = -1; k <= 1; k++) { c.beginPath(); c.moveTo(k * s * 0.16, -s * 0.32); c.lineTo(k * s * 0.16, s * 0.32); c.stroke(); }
+        break;
+      }
+      case 'teleport': {
+        c.strokeStyle = o.off ? P.iron : '#c9a8ff'; c.shadowColor = '#b38be0'; c.shadowBlur = o.off ? 0 : s * 0.25;
+        c.beginPath(); c.arc(0, 0, s * 0.32, 0, Math.PI * 2); c.stroke();
+        c.beginPath(); c.arc(0, 0, s * 0.18, t * 2, t * 2 + Math.PI * 1.4); c.stroke();
+        for (let k = 0; k < 4; k++) { const a = t + (k * Math.PI) / 2; c.beginPath(); c.arc(Math.cos(a) * s * 0.32, Math.sin(a) * s * 0.32, s * 0.035, 0, Math.PI * 2); c.stroke(); }
+        break;
+      }
+      case 'boulder': {
+        c.fillStyle = o.off ? P.iron : '#6d6474'; c.beginPath(); c.arc(0, 0, s * 0.3, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#2a2430'; c.beginPath(); c.arc(-s * 0.06, -s * 0.06, s * 0.14, 0.4, 2.2); c.stroke();
+        c.beginPath(); c.moveTo(s * 0.08, s * 0.06); c.lineTo(s * 0.18, s * 0.16); c.stroke();
+        break;
+      }
+      case 'gravity': {
+        const g2 = c.createRadialGradient(0, 0, 0, 0, 0, s * 0.4);
+        g2.addColorStop(0, o.off ? 'rgba(80,80,90,0.6)' : 'rgba(40,10,70,0.95)'); g2.addColorStop(1, 'rgba(40,10,70,0)');
+        c.fillStyle = g2; c.beginPath(); c.arc(0, 0, s * 0.4, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = o.off ? P.iron : '#7a5ab8';
+        for (let k = 1; k <= 3; k++) { c.beginPath(); c.arc(0, 0, s * 0.1 * k + (t * 0.05 % 0.1) * s, 0, Math.PI * 2); c.stroke(); }
+        break;
+      }
+      // ------------------------------------------------ new monsters (one shared creature shape, configured per kind)
+      case 'kobold': critter(c, s * 0.72, { body: '#8a6a3a', eye: '#ffd34d', ears: 'pointy', snout: true }); break;
+      case 'orc': critter(c, s * 0.95, { body: '#5f7a3a', eye: '#ff4d3d', tusks: true }); break;
+      case 'lizardman': critter(c, s * 0.9, { body: '#3f7a62', eye: '#e3e36a', snout: true, spear: true }); break;
+      case 'harpy': critter(c, s * 0.85, { body: '#a07850', eye: '#ffd34d', wings: '#8a5a3a', flap: t * 8 }); break;
+      case 'gargoyle': critter(c, s * 1, { body: o.awake ? '#6d6878' : '#7d7880', eye: o.awake ? '#ff4d3d' : '#55505a', horns: '#4a4652', wings: '#55505a', flap: o.awake ? t * 5 : 0 }); break;
+      case 'minotaur': critter(c, s * 1.05, { body: '#7a4a35', eye: '#ff4d3d', horns: '#e9e0d2', ring: P.gold }); break;
+      case 'basilisk': critter(c, s * 1.05, { body: '#4a6a4a', eye: '#ffdf3d', snout: true, crest: '#a83a3a' }); break;
+      case 'vampire': critter(c, s * 0.95, { body: '#2a1a2e', face: '#e8dfe8', eye: '#ff2d4d', cape: '#7a1a2a' }); break;
+      case 'dullahan': critter(c, s * 1.1, { body: '#2b2a36', headless: true, eye: '#5af0ff', cape: '#1a1a26' }); break;
+      case 'chimera': critter(c, s * 1.15, { body: '#a8742c', eye: '#ffd34d', mane: '#7a4a1c', horns: '#d8cbb3', wings: '#7a4a1c', flap: t * 3 }); break;
+      case 'orcwarlord': critter(c, s * 1.15, { body: '#4f6a2a', eye: '#ff4d3d', tusks: true, crown: true }); break;
+      case 'minotaurking': critter(c, s * 1.2, { body: '#6a3a28', eye: '#ff4d3d', horns: '#ffe6a3', crown: true }); break;
+      case 'vampirelord': critter(c, s * 1.15, { body: '#1a0e1e', face: '#f0e6f0', eye: '#ff2d4d', cape: '#9a1a2a', crown: true, wings: '#2a0e1e', flap: t * 2 }); break;
+      // ------------------------------------------------ hordes, rooms and the seal
+      case 'warren': case 'warband': case 'nest': {
+        c.fillStyle = '#17121a'; c.beginPath(); c.ellipse(0, s * 0.12, s * 0.36, s * 0.2, 0, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = type === 'nest' ? '#a07850' : '#6d5a3a'; c.lineWidth = lw * 1.4;
+        for (let k = 0; k < 5; k++) { c.beginPath(); c.arc(0, s * 0.12, s * (0.2 + 0.04 * k), Math.PI * 1.05, Math.PI * 1.95); c.stroke(); }
+        const pk = RD.ITEMS[type].pack;
+        RD.glyph(c, pk, -s * 0.14, -s * 0.06, s * 0.5, { awake: true });
+        RD.glyph(c, pk, s * 0.16, -s * 0.1, s * 0.5, { awake: true });
+        break;
+      }
+      case 'banner': {
+        c.strokeStyle = P.bone; c.lineWidth = lw * 1.4; c.beginPath(); c.moveTo(-s * 0.2, s * 0.36); c.lineTo(-s * 0.2, -s * 0.36); c.stroke();
+        c.fillStyle = P.malice; c.beginPath(); c.moveTo(-s * 0.18, -s * 0.34); c.lineTo(s * 0.28, -s * 0.24 + Math.sin(t * 4) * s * 0.03); c.lineTo(s * 0.16, -s * 0.08); c.lineTo(s * 0.28, s * 0.06 + Math.sin(t * 4 + 1) * s * 0.03); c.lineTo(-s * 0.18, -s * 0.02); c.closePath(); c.fill();
+        c.fillStyle = P.bone; c.beginPath(); c.arc(s * 0.04, -s * 0.17, s * 0.06, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'sigil': {
+        c.strokeStyle = P.gold; c.shadowColor = P.gold; c.shadowBlur = s * 0.15;
+        c.beginPath(); for (let k = 0; k < 6; k++) { const a = (k * Math.PI) / 3 + t * 0.5; c[k ? 'lineTo' : 'moveTo'](Math.cos(a) * s * 0.32, Math.sin(a) * s * 0.32); } c.closePath(); c.stroke();
+        c.beginPath(); c.arc(0, 0, s * 0.12, 0, Math.PI * 2); c.stroke();
+        c.beginPath(); c.moveTo(-s * 0.08, 0); c.lineTo(s * 0.08, 0); c.moveTo(0, -s * 0.08); c.lineTo(0, s * 0.08); c.stroke();
+        break;
+      }
+      case 'seal': {
+        c.fillStyle = 'rgba(196,60,104,0.18)'; c.beginPath(); c.arc(0, 0, s * 0.42, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = P.maliceHi; c.lineWidth = lw * 1.6; c.shadowColor = P.malice; c.shadowBlur = s * 0.2 * (0.6 + 0.4 * Math.sin(t * 3));
+        c.beginPath(); c.arc(0, 0, s * 0.32, 0, Math.PI * 2); c.stroke();
+        c.beginPath(); for (let k = 0; k < 5; k++) { const a = -Math.PI / 2 + (k * 4 * Math.PI) / 5; c[k ? 'lineTo' : 'moveTo'](Math.cos(a) * s * 0.28, Math.sin(a) * s * 0.28); } c.closePath(); c.stroke();
+        break;
+      }
       case 'mimic': {
         const open = o.awake ? 0.5 + 0.3 * Math.sin(t * 10) : 0;
         c.fillStyle = '#6b4424';
@@ -537,6 +629,13 @@
         break;
       }
       // ------------------------------------------------ tools and powers
+      case 'inspect': {
+        c.strokeStyle = P.steel; c.lineWidth = lw * 1.6;
+        c.beginPath(); c.arc(-s * 0.06, -s * 0.06, s * 0.2, 0, Math.PI * 2); c.stroke();
+        c.beginPath(); c.moveTo(s * 0.09, s * 0.09); c.lineTo(s * 0.3, s * 0.3); c.stroke();
+        c.fillStyle = P.steel; c.font = `700 ${s * 0.22}px "Alegreya Sans", sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('i', -s * 0.06, -s * 0.05);
+        break;
+      }
       case 'dig': {
         c.strokeStyle = P.bone;
         c.lineWidth = lw * 1.6;
@@ -582,6 +681,69 @@
         c.beginPath(); c.moveTo(-s * 0.35, 0); c.lineTo(-s * 0.18, -s * 0.2); c.lineTo(-s * 0.02, s * 0.18); c.lineTo(s * 0.14, -s * 0.22); c.lineTo(s * 0.35, 0.05 * s); c.stroke();
         break;
       }
+      case 'lure': coins(c, s, 40); c.strokeStyle = 'rgba(179,139,224,0.8)'; c.setLineDash([s * 0.06, s * 0.06]); c.beginPath(); c.arc(0, 0, s * 0.34, 0, Math.PI * 2); c.stroke(); break;
+      case 'collapse': {
+        c.fillStyle = P.rockFace;
+        for (const [x, y, r] of [[-0.18, 0.18, 0.13], [0.06, 0.2, 0.15], [0.22, 0.1, 0.1], [-0.04, -0.02, 0.12]]) { c.beginPath(); c.arc(x * s, y * s, r * s, 0, Math.PI * 2); c.fill(); }
+        c.strokeStyle = P.bone; c.lineWidth = lw * 1.4;
+        c.beginPath(); c.moveTo(-s * 0.1, -s * 0.36); c.lineTo(-s * 0.1, -s * 0.18); c.moveTo(s * 0.12, -s * 0.4); c.lineTo(s * 0.12, -s * 0.2); c.stroke();
+        break;
+      }
+      case 'frenzy': {
+        c.fillStyle = P.malice;
+        c.beginPath(); c.moveTo(0, -s * 0.34); c.quadraticCurveTo(s * 0.3, -s * 0.02, 0, s * 0.32); c.quadraticCurveTo(-s * 0.3, -s * 0.02, 0, -s * 0.34); c.fill();
+        c.fillStyle = P.maliceHi; c.beginPath(); c.arc(-s * 0.06, s * 0.06, s * 0.07, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'raise': {
+        c.fillStyle = P.bone;
+        c.beginPath(); c.arc(0, -s * 0.12, s * 0.16, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#1a141d'; c.beginPath(); c.arc(-s * 0.06, -s * 0.13, s * 0.04, 0, Math.PI * 2); c.arc(s * 0.06, -s * 0.13, s * 0.04, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = P.rockRim; c.lineWidth = lw * 1.6; c.beginPath(); c.moveTo(-s * 0.36, s * 0.22); c.lineTo(s * 0.36, s * 0.22); c.stroke();
+        c.strokeStyle = P.bone; c.lineWidth = lw * 1.2; c.beginPath(); c.moveTo(-s * 0.2, s * 0.2); c.lineTo(-s * 0.26, s * 0.02); c.moveTo(s * 0.2, s * 0.2); c.lineTo(s * 0.26, s * 0.02); c.stroke();
+        break;
+      }
+      case 'power:seal': {
+        c.fillStyle = '#3c3742'; rr(c, -s * 0.3, -s * 0.34, s * 0.6, s * 0.68, s * 0.05); c.fill();
+        c.strokeStyle = P.gold; c.lineWidth = lw * 1.6;
+        for (let k = -1; k <= 1; k++) { c.beginPath(); c.moveTo(k * s * 0.15, -s * 0.3); c.lineTo(k * s * 0.15, s * 0.3); c.stroke(); }
+        c.beginPath(); c.moveTo(-s * 0.3, 0); c.lineTo(s * 0.3, 0); c.stroke();
+        break;
+      }
+      case 'mire': {
+        c.fillStyle = '#5a4a2a'; c.beginPath(); c.ellipse(0, s * 0.2, s * 0.36, s * 0.12, 0, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#a89060'; c.lineWidth = lw * 1.5;
+        for (const k of [-1, 1]) { c.beginPath(); c.moveTo(k * s * 0.14, s * 0.18); c.quadraticCurveTo(k * s * 0.2, -s * 0.05, k * s * 0.1, -s * 0.28); c.stroke(); for (const t of [-0.08, 0, 0.08]) { c.beginPath(); c.moveTo(k * s * 0.1, -s * 0.28); c.lineTo(k * s * (0.1 + t), -s * 0.38); c.stroke(); } }
+        break;
+      }
+      case 'rearm': {
+        c.fillStyle = P.maliceHi;
+        c.beginPath(); c.moveTo(s * 0.06, -s * 0.38); c.lineTo(-s * 0.18, s * 0.04); c.lineTo(0, s * 0.04); c.lineTo(-s * 0.06, s * 0.38); c.lineTo(s * 0.2, -s * 0.06); c.lineTo(s * 0.02, -s * 0.06); c.closePath(); c.fill();
+        break;
+      }
+      case 'mend': {
+        c.strokeStyle = P.venom; c.lineWidth = lw * 2.2;
+        c.beginPath(); c.moveTo(0, -s * 0.3); c.lineTo(0, s * 0.3); c.moveTo(-s * 0.3, 0); c.lineTo(s * 0.3, 0); c.stroke();
+        c.strokeStyle = P.malice; c.lineWidth = lw; c.beginPath(); c.arc(0, 0, s * 0.36, 0, Math.PI * 2); c.stroke();
+        break;
+      }
+      case 'dread': {
+        c.strokeStyle = P.violet; c.lineWidth = lw * 1.3;
+        for (const r of [0.14, 0.26, 0.38]) { c.beginPath(); c.arc(-s * 0.2, 0, r * s, -0.7, 0.7); c.stroke(); }
+        c.fillStyle = P.bone; c.beginPath(); c.arc(-s * 0.24, 0, s * 0.08, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'smite': {
+        c.strokeStyle = P.violet; c.lineWidth = lw * 2;
+        c.beginPath(); c.moveTo(-s * 0.05, -s * 0.4); c.lineTo(s * 0.12, -s * 0.08); c.lineTo(-s * 0.08, -s * 0.02); c.lineTo(s * 0.06, s * 0.36); c.stroke();
+        c.fillStyle = P.maliceHi; c.beginPath(); c.arc(s * 0.06, s * 0.36, s * 0.07, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'banish': {
+        c.strokeStyle = P.violet; c.lineWidth = lw * 1.5;
+        c.beginPath(); for (let k = 0; k < 40; k++) { const a = k * 0.45, r = s * 0.02 + k * s * 0.009; const px = Math.cos(a) * r, py = Math.sin(a) * r; if (k) c.lineTo(px, py); else c.moveTo(px, py); } c.stroke();
+        break;
+      }
       case 'douse': {
         c.fillStyle = P.ash;
         c.fillRect(-s * 0.04, -s * 0.02, s * 0.08, s * 0.32);
@@ -592,6 +754,39 @@
     }
     c.restore();
   };
+
+  // One configurable creature: body, head, eyes, and optional ears, snout, tusks, horns, wings, cape, crown.
+  function critter(c, k, o) {
+    if (o.wings) {
+      const f = Math.sin(o.flap || 0) * 0.12;
+      c.fillStyle = o.wings;
+      c.beginPath(); c.moveTo(-k * 0.1, 0); c.lineTo(-k * 0.46, -k * (0.24 + f)); c.lineTo(-k * 0.34, k * 0.1); c.closePath(); c.fill();
+      c.beginPath(); c.moveTo(k * 0.1, 0); c.lineTo(k * 0.46, -k * (0.24 + f)); c.lineTo(k * 0.34, k * 0.1); c.closePath(); c.fill();
+    }
+    if (o.cape) { c.fillStyle = o.cape; c.beginPath(); c.moveTo(-k * 0.3, k * 0.34); c.lineTo(-k * 0.2, -k * 0.12); c.lineTo(k * 0.2, -k * 0.12); c.lineTo(k * 0.3, k * 0.34); c.closePath(); c.fill(); }
+    c.fillStyle = o.body;
+    c.beginPath(); c.ellipse(0, k * 0.12, k * 0.24, k * 0.22, 0, 0, Math.PI * 2); c.fill();
+    if (o.mane) { c.fillStyle = o.mane; c.beginPath(); c.arc(0, -k * 0.12, k * 0.22, 0, Math.PI * 2); c.fill(); }
+    if (!o.headless) {
+      c.fillStyle = o.face || o.body;
+      c.beginPath(); c.arc(0, -k * 0.12, k * 0.17, 0, Math.PI * 2); c.fill();
+      if (o.snout) { c.beginPath(); c.ellipse(0, -k * 0.04, k * 0.09, k * 0.06, 0, 0, Math.PI * 2); c.fill(); }
+      if (o.ears === 'pointy') { c.beginPath(); c.moveTo(-k * 0.14, -k * 0.2); c.lineTo(-k * 0.28, -k * 0.34); c.lineTo(-k * 0.06, -k * 0.26); c.moveTo(k * 0.14, -k * 0.2); c.lineTo(k * 0.28, -k * 0.34); c.lineTo(k * 0.06, -k * 0.26); c.fill(); }
+      if (o.horns) { c.fillStyle = o.horns; c.beginPath(); c.moveTo(-k * 0.12, -k * 0.24); c.quadraticCurveTo(-k * 0.34, -k * 0.3, -k * 0.3, -k * 0.46); c.quadraticCurveTo(-k * 0.24, -k * 0.32, -k * 0.04, -k * 0.28); c.moveTo(k * 0.12, -k * 0.24); c.quadraticCurveTo(k * 0.34, -k * 0.3, k * 0.3, -k * 0.46); c.quadraticCurveTo(k * 0.24, -k * 0.32, k * 0.04, -k * 0.28); c.fill(); }
+      if (o.crest) { c.fillStyle = o.crest; for (let i = -1; i <= 1; i++) { c.beginPath(); c.moveTo(i * k * 0.07 - k * 0.03, -k * 0.27); c.lineTo(i * k * 0.07, -k * 0.4); c.lineTo(i * k * 0.07 + k * 0.03, -k * 0.27); c.fill(); } }
+      c.fillStyle = o.eye;
+      c.beginPath(); c.arc(-k * 0.065, -k * 0.13, k * 0.035, 0, Math.PI * 2); c.arc(k * 0.065, -k * 0.13, k * 0.035, 0, Math.PI * 2); c.fill();
+      if (o.tusks) { c.fillStyle = P.bone; c.beginPath(); c.moveTo(-k * 0.08, -k * 0.02); c.lineTo(-k * 0.06, -k * 0.1); c.lineTo(-k * 0.03, -k * 0.02); c.moveTo(k * 0.08, -k * 0.02); c.lineTo(k * 0.06, -k * 0.1); c.lineTo(k * 0.03, -k * 0.02); c.fill(); }
+      if (o.ring) { c.strokeStyle = o.ring; c.lineWidth = Math.max(1, k / 22); c.beginPath(); c.arc(0, -k * 0.02, k * 0.04, 0, Math.PI * 2); c.stroke(); }
+      if (o.crown) { c.fillStyle = P.gold; c.beginPath(); c.moveTo(-k * 0.14, -k * 0.26); c.lineTo(-k * 0.14, -k * 0.38); c.lineTo(-k * 0.06, -k * 0.31); c.lineTo(0, -k * 0.42); c.lineTo(k * 0.06, -k * 0.31); c.lineTo(k * 0.14, -k * 0.38); c.lineTo(k * 0.14, -k * 0.26); c.closePath(); c.fill(); }
+    } else {
+      // a headless rider: a cold flame where the head should be
+      c.fillStyle = o.eye; c.globalAlpha *= 0.8;
+      c.beginPath(); c.moveTo(-k * 0.08, -k * 0.06); c.quadraticCurveTo(0, -k * 0.34, k * 0.08, -k * 0.06); c.closePath(); c.fill();
+      c.globalAlpha /= 0.8;
+    }
+    if (o.spear) { c.strokeStyle = P.bone; c.lineWidth = Math.max(1, k / 18); c.beginPath(); c.moveTo(k * 0.28, k * 0.34); c.lineTo(k * 0.28, -k * 0.4); c.stroke(); c.beginPath(); c.moveTo(k * 0.24, -k * 0.32); c.lineTo(k * 0.28, -k * 0.44); c.lineTo(k * 0.32, -k * 0.32); c.stroke(); }
+  }
 
   function aura(c, s, col, t) {
     const a = 0.25 + 0.15 * Math.sin(t * 2.5);
@@ -606,6 +801,17 @@
     return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
   }
   RD.hexA = hexA;
+
+  // a small steel eye: "the guild knows about this"
+  function eye(c, x, y, r) {
+    c.fillStyle = 'rgba(13,11,16,0.85)';
+    c.beginPath(); c.arc(x, y, r * 1.35, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = P.steel;
+    c.lineWidth = Math.max(1, r * 0.35);
+    c.beginPath(); c.moveTo(x - r, y); c.quadraticCurveTo(x, y - r * 0.9, x + r, y); c.quadraticCurveTo(x, y + r * 0.9, x - r, y); c.stroke();
+    c.fillStyle = P.steel;
+    c.beginPath(); c.arc(x, y, r * 0.35, 0, Math.PI * 2); c.fill();
+  }
 
   function rr(c, x, y, w, h, r) {
     c.beginPath();
@@ -673,6 +879,20 @@
       case 'cleric': c.fillRect(-k * 0.25, -k, k * 0.5, k * 2); c.fillRect(-k * 0.8, -k * 0.45, k * 1.6, k * 0.5); break;
       case 'saint': c.beginPath(); c.arc(0, 0, k * 0.8, 0, Math.PI * 2); c.stroke(); c.fillRect(-k * 0.2, -k * 0.6, k * 0.4, k * 1.2); break;
       case 'swordsaint': c.beginPath(); c.moveTo(-k, k); c.lineTo(k, -k); c.moveTo(k, k); c.lineTo(-k, -k); c.stroke(); break;
+      case 'ranger': c.beginPath(); c.arc(-k * 0.3, 0, k, -Math.PI / 2, Math.PI / 2); c.moveTo(-k * 0.3, -k); c.lineTo(-k * 0.3, k); c.moveTo(-k, 0); c.lineTo(k, 0); c.stroke(); break;
+      case 'berserker': c.beginPath(); c.moveTo(0, -k); c.lineTo(0, k * 1.1); c.stroke(); c.beginPath(); c.moveTo(0, -k * 0.8); c.quadraticCurveTo(k * 1.1, -k * 0.6, k * 0.9, k * 0.2); c.lineTo(0, -k * 0.1); c.fill(); c.beginPath(); c.moveTo(0, -k * 0.8); c.quadraticCurveTo(-k * 1.1, -k * 0.6, -k * 0.9, k * 0.2); c.lineTo(0, -k * 0.1); c.fill(); break;
+      case 'alchemist': c.beginPath(); c.moveTo(-k * 0.25, -k); c.lineTo(k * 0.25, -k); c.lineTo(k * 0.25, -k * 0.3); c.lineTo(k * 0.9, k * 0.9); c.lineTo(-k * 0.9, k * 0.9); c.lineTo(-k * 0.25, -k * 0.3); c.closePath(); c.fill(); break;
+      case 'bard': c.beginPath(); c.arc(-k * 0.35, k * 0.6, k * 0.4, 0, Math.PI * 2); c.fill(); c.fillRect(-k * 0.05, -k, k * 0.22, k * 1.6); c.beginPath(); c.moveTo(k * 0.17, -k); c.quadraticCurveTo(k * 1, -k * 0.7, k * 0.6, -k * 0.1); c.stroke(); break;
+      case 'monk': c.beginPath(); c.arc(0, 0, k * 0.9, 0, Math.PI * 2); c.stroke(); c.beginPath(); c.arc(0, 0, k * 0.3, 0, Math.PI * 2); c.fill(); break;
+      case 'tamer': c.beginPath(); c.arc(0, k * 0.3, k * 0.5, 0, Math.PI * 2); c.fill(); for (const [x, y] of [[-0.6, -0.4], [-0.2, -0.8], [0.2, -0.8], [0.6, -0.4]]) { c.beginPath(); c.arc(x * k, y * k, k * 0.22, 0, Math.PI * 2); c.fill(); } break;
+      case 'ninja': for (let i = 0; i < 4; i++) { c.save(); c.rotate((i * Math.PI) / 2 + Math.PI / 4); c.beginPath(); c.moveTo(0, 0); c.lineTo(k * 0.25, -k * 0.25); c.lineTo(0, -k * 1.1); c.lineTo(-k * 0.25, -k * 0.25); c.closePath(); c.fill(); c.restore(); } break;
+      case 'samurai': c.beginPath(); c.moveTo(-k, k * 0.9); c.quadraticCurveTo(0, -k * 0.2, k * 1.1, -k); c.stroke(); c.fillRect(-k * 0.6, k * 0.35, k * 0.45, k * 0.18); break;
+      case 'darkknight': c.beginPath(); c.moveTo(-k, -k); c.lineTo(k, -k); c.lineTo(k, 0); c.quadraticCurveTo(k, k, 0, k * 1.3); c.quadraticCurveTo(-k, k, -k, 0); c.closePath(); c.fill(); c.fillStyle = '#e05a86'; c.beginPath(); c.arc(0, -k * 0.1, k * 0.25, 0, Math.PI * 2); c.fill(); break;
+      case 'shieldhero': c.beginPath(); c.moveTo(-k * 1.1, -k * 1.1); c.lineTo(k * 1.1, -k * 1.1); c.lineTo(k * 1.1, k * 0.1); c.quadraticCurveTo(k, k * 1.2, 0, k * 1.4); c.quadraticCurveTo(-k, k * 1.2, -k * 1.1, k * 0.1); c.closePath(); c.fill(); c.fillStyle = '#7fe0d8'; c.beginPath(); c.arc(0, -k * 0.1, k * 0.3, 0, Math.PI * 2); c.fill(); break;
+      case 'goblinslayer': c.fillRect(-k * 0.9, -k * 0.6, k * 1.8, k * 0.3); c.fillRect(-k * 0.9, -k * 0.6, k * 0.3, k * 1.6); c.fillRect(k * 0.6, -k * 0.6, k * 0.3, k * 1.6); c.fillRect(-k * 0.15, -k * 0.3, k * 0.3, k * 1.3); break;
+      case 'phantomthief': c.beginPath(); c.ellipse(0, 0, k * 1.1, k * 0.5, 0, 0, Math.PI * 2); c.fill(); c.fillStyle = '#e3b04b'; c.beginPath(); c.arc(-k * 0.45, 0, k * 0.2, 0, Math.PI * 2); c.arc(k * 0.45, 0, k * 0.2, 0, Math.PI * 2); c.fill(); break;
+      case 'sage': c.fillRect(-k * 0.9, -k * 0.7, k * 0.85, k * 1.4); c.fillRect(k * 0.05, -k * 0.7, k * 0.85, k * 1.4); c.strokeStyle = '#b8e0f0'; c.beginPath(); c.moveTo(0, -k * 0.7); c.lineTo(0, k * 0.7); c.stroke(); break;
+      case 'dragonslayer': c.fillRect(-k * 0.12, -k * 1.2, k * 0.24, k * 1.7); c.fillRect(-k * 0.75, k * 0.35, k * 1.5, k * 0.25); c.beginPath(); c.arc(0, k * 0.95, k * 0.22, 0, Math.PI * 2); c.fill(); break;
       case 'shadow': c.beginPath(); c.arc(0, 0, k, Math.PI * 0.3, Math.PI * 1.7); c.arc(k * 0.4, 0, k * 0.8, Math.PI * 1.6, Math.PI * 0.4, true); c.fill(); break;
       case 'chosen':
         c.beginPath(); c.moveTo(0, -k * 1.3); c.lineTo(k * 0.25, -k * 0.2); c.lineTo(-k * 0.25, -k * 0.2); c.closePath(); c.fill();
@@ -690,9 +910,24 @@
     heroGlyph(c, { cls: h.cls, tier: h.tier, title: h.title }, size * 0.95);
   };
 
-  // rank letter and level pips on a placed piece
+  // rank letter and level pips on a placed piece, drawn once per size and reused as an image
+  const badgeCache = new Map();
   function badge(c, cx, cy, T, tier, lv) {
     if (T < 20) return;
+    const key = `${tier}|${lv}|${T}|${V.dpr}`;
+    let img = badgeCache.get(key);
+    if (!img) {
+      if (badgeCache.size > 400) badgeCache.clear();
+      img = document.createElement('canvas');
+      img.width = img.height = Math.ceil(T * V.dpr);
+      const b = img.getContext('2d');
+      b.scale(V.dpr, V.dpr);
+      drawBadge(b, T / 2, T / 2, T, tier, lv);
+      badgeCache.set(key, img);
+    }
+    c.drawImage(img, cx - T / 2, cy - T / 2, T, T);
+  }
+  function drawBadge(c, cx, cy, T, tier, lv) {
     const L = RD.TIERS[tier];
     const fs = Math.max(8, Math.round(T * 0.24));
     c.font = `600 ${fs}px "DM Mono", monospace`;
@@ -787,7 +1022,7 @@
         if (!R) { RD.glyph(c, it.type, cx, cy, T, { alpha: ui.carry === it.tile ? 0.25 : null }); badge(c, cx, cy, T, d.tier, it.lv); }
         continue;
       }
-      const o = { off: it.off || it.spent || (it.cd > 0 && G.phase === 'raid'), broken: it.broken, hp: d.kind === 'door' ? it.hp / RD.scaled(it.type, 'hp', it.lv) : null };
+      const o = { off: it.off || it.spent || it.jamT > 0 || (it.cd > 0 && G.phase === 'raid' && d.kind === 'trap'), broken: it.broken, hp: d.kind === 'door' ? it.hp / RD.scaled(it.type, 'hp', it.lv) : null };
       if (d.kind === 'turret') {
         const dirs = [[1, 0, 0], [-1, 0, Math.PI], [0, 1, Math.PI / 2], [0, -1, -Math.PI / 2]];
         const [x, y] = xy(it.tile);
@@ -800,6 +1035,15 @@
       if (G.phase === 'build') badge(c, cx, cy, T, d.tier, it.lv);
     }
 
+    if (R && R.lure && on(R.lure.tile)) {
+      const [cx, cy] = tc(R.lure.tile);
+      c.save(); c.globalAlpha = 0.6 + 0.3 * Math.sin(V.time * 6); c.translate(cx, cy); coins(c, T, 60); c.restore();
+    }
+    if (R && R.sealT > 0 && F === 0) {
+      const [gx, gy] = tc(G.entrance);
+      c.strokeStyle = P.gold; c.lineWidth = Math.max(2, T / 10);
+      for (let k = -1; k <= 1; k++) { c.beginPath(); c.moveTo(gx + k * T * 0.25, gy - T * 0.45); c.lineTo(gx + k * T * 0.25, gy + T * 0.45); c.stroke(); }
+    }
     if (R) for (const cl of R.clouds) {
       if (cl.f !== F) continue;
       const a = Math.min(1, cl.t / 0.6) * 0.45;
@@ -813,6 +1057,8 @@
     if (R) for (const m of R.monsters) {
       if (m.dead || !on(m.tile)) continue;
       const lx = m.lunge > 0 ? (m.face || 1) * T * 0.08 : 0;
+      if (m.calmT > 0) { c.fillStyle = '#a8d48a'; c.font = `600 ${Math.round(T * 0.28)}px sans-serif`; c.textAlign = 'center'; c.fillText('z', m.x * T + T * 0.3, m.y * T - T * 0.35); }
+      if (R.frenzyT > 0) { c.fillStyle = 'rgba(224,90,134,0.28)'; c.beginPath(); c.arc(m.x * T, m.y * T, T * 0.45, 0, Math.PI * 2); c.fill(); }
       RD.glyph(c, m.type, m.x * T + lx, m.y * T, T, { awake: !m.dormant });
       if (m.hp < m.maxHp) bar(c, m.x * T - T * 0.35, m.y * T - T * 0.55, T * 0.7, m.hp / m.maxHp, P.maliceHi);
       badge(c, m.x * T + lx, m.y * T, T, m.tier, m.lv);
@@ -837,6 +1083,9 @@
         for (let k = 0; k < 3; k++) { const a = V.time * 5 + (k * Math.PI * 2) / 3; c.beginPath(); c.arc(h.x * T + Math.cos(a) * T * 0.25, h.y * T - T * 0.4 + Math.sin(a) * T * 0.08, T * 0.04, 0, Math.PI * 2); c.fill(); }
       }
       if (h.slowT > 0) { c.strokeStyle = 'rgba(207,233,255,0.6)'; c.lineWidth = 1.5; c.beginPath(); c.arc(h.x * T, h.y * T, T * 0.33, 0, Math.PI * 2); c.stroke(); }
+      if (h.cageT > 0) { c.strokeStyle = '#a59cad'; c.lineWidth = 2; for (let k = -1; k <= 1; k++) { c.beginPath(); c.moveTo(h.x * T + k * T * 0.18, h.y * T - T * 0.36); c.lineTo(h.x * T + k * T * 0.18, h.y * T + T * 0.34); c.stroke(); } }
+      if (h.poison) { c.fillStyle = 'rgba(134,192,106,0.35)'; c.beginPath(); c.arc(h.x * T, h.y * T, T * 0.3, 0, Math.PI * 2); c.fill(); }
+      if (h.fearT > 0) { c.fillStyle = '#5af0ff'; c.font = `700 ${Math.round(T * 0.3)}px sans-serif`; c.textAlign = 'center'; c.fillText('!', h.x * T + T * 0.3, h.y * T - T * 0.3); }
       if (h.disarmAt >= 0 || h.doorAt >= 0 || h.state === 'loot') {
         const C = RD.CLASSES[h.cls];
         const f = h.state === 'loot' ? 1 - h.lootT / 1.2 : h.disarmAt >= 0 ? 1 - h.disarmT / (C.disarm || 1) : 0;
@@ -914,6 +1163,16 @@
 
     if (V.guildMap) drawGuildMap(c, G, R ? (R.feud ? G.guild.K : R.shared) : G.guild.K);
 
+    // tutorial markers: pulsing gold rings on the tiles the coach is talking about
+    for (const g of V.marks) {
+      if (!on(g)) continue;
+      const [cx, cy] = tc(g);
+      const p = 0.5 + 0.5 * Math.sin(V.time * 4);
+      c.strokeStyle = `rgba(227,176,75,${0.45 + 0.45 * p})`;
+      c.lineWidth = 3;
+      c.beginPath(); c.arc(cx, cy, T * (0.46 + 0.08 * p), 0, Math.PI * 2); c.stroke();
+    }
+
     if (hov >= 0 && G.phase === 'build') {
       const [x, y] = xy(hov);
       const err = ui.previewError;
@@ -925,13 +1184,44 @@
       const ghost = ui.carry != null ? G.items.get(ui.carry) && G.items.get(ui.carry).type : RD.ITEMS[ui.tool] ? ui.tool : ui.tool === 'hoard' ? 'hoard' : null;
       if (ghost && !err) RD.glyph(c, ghost, x * T + T / 2, y * T + T / 2, T, { alpha: 0.55 });
     }
-    if (hov >= 0 && G.phase === 'raid' && ui.power === 'tremor') {
+    if (hov >= 0 && G.phase === 'raid' && ui.power && RD.POWERS[ui.power].target) {
       const [cx, cy] = tc(hov);
       c.strokeStyle = P.maliceHi;
       c.setLineDash([4, 4]);
-      c.beginPath(); c.arc(cx, cy, T * 1.6, 0, Math.PI * 2); c.stroke();
+      c.beginPath(); c.arc(cx, cy, T * RD.POWERS[ui.power].radius, 0, Math.PI * 2); c.stroke();
       c.setLineDash([]);
+      RD.glyph(c, ui.power === 'seal' ? 'power:seal' : ui.power, cx, cy, T * 0.8, { alpha: 0.6 });
     }
+
+    // what the party already knows: an eye on every hidden trap in their shared map
+    if (R && G.phase === 'raid') {
+      const K = R.shared;
+      for (const [t, v] of K.traps) {
+        if (!on(t) || v.off) continue;
+        const [cx, cy] = tc(t);
+        eye(c, cx - T * 0.3, cy - T * 0.3, T * 0.13);
+      }
+    }
+
+    // speech bubbles
+    c.font = `600 ${Math.max(10, Math.round(T * 0.3))}px "Alegreya Sans", sans-serif`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    for (const b of RD.FX.bubbles) {
+      const h = b.h;
+      if (!RD.heroAlive(h) || !on(h.tile)) continue;
+      const a = Math.min(1, b.t / 0.12, (b.life - b.t) / 0.4);
+      const w = c.measureText(b.text).width + T * 0.3, hh = T * 0.42;
+      const x = Math.max(w / 2, Math.min(COLS * T - w / 2, h.x * T)), y = h.y * T - T * 0.85;
+      c.globalAlpha = a;
+      c.fillStyle = 'rgba(233,224,210,0.95)';
+      rr(c, x - w / 2, y - hh / 2, w, hh, hh * 0.35);
+      c.fill();
+      c.beginPath(); c.moveTo(h.x * T - T * 0.08, y + hh / 2 - 1); c.lineTo(h.x * T, y + hh / 2 + T * 0.12); c.lineTo(h.x * T + T * 0.08, y + hh / 2 - 1); c.fill();
+      c.fillStyle = '#17121a';
+      c.fillText(b.text, x, y + 0.5);
+    }
+    c.globalAlpha = 1;
 
     c.textAlign = 'center';
     c.textBaseline = 'middle';
@@ -949,7 +1239,9 @@
     c.restore();
   };
 
-  const SHORT = { goblin: 'Gb', skeleton: 'Sk', slime: 'Sl', mimic: 'Mi', spider: 'Sp', brute: 'Br', wraith: 'Wr', troll: 'Tr', wyvern: 'Wy', golem: 'Go',
+  const SHORT = { kobold: 'Kb', orc: 'Or', lizardman: 'Lz', harpy: 'Hp', gargoyle: 'Gg', minotaur: 'Mn', basilisk: 'Bs', vampire: 'Vp', dullahan: 'Du', chimera: 'Ch',
+    warren: 'W!', warband: 'O!', nest: 'H!', orcwarlord: 'OW', minotaurking: 'MK', vampirelord: 'VL',
+    goblin: 'Gb', skeleton: 'Sk', slime: 'Sl', mimic: 'Mi', spider: 'Sp', brute: 'Br', wraith: 'Wr', troll: 'Tr', wyvern: 'Wy', golem: 'Go',
     goblinking: 'GK', lich: 'Li', dragon: 'Dr', hydra: 'Hy', behemoth: 'Be', demonlord: 'DL' };
 
   function drawGuildMap(c, G, K) {

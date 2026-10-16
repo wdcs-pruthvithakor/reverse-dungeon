@@ -1,5 +1,5 @@
 'use strict';
-// DOM wiring: blueprints, floors, the ledger, modals, input, and the frame loop.
+// DOM wiring: blueprints, floors, the ledger, modals, input, the tutorial, portal hooks and the frame loop.
 (function () {
   const RD = window.RD;
   const $ = (id) => document.getElementById(id);
@@ -12,16 +12,117 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const tierTag = (t) => `<span class="tier" style="--tc:${RD.TIER_COLOR[t]}">${RD.TIERS[t]}</span>`;
 
-  const ui = (RD.ui = { tool: 'spikes', carry: null, power: null, speed: 1, previewError: null, follow: true, diff: 'normal', hoverIt: null });
+  const ui = (RD.ui = {
+    partyKey: '', logKey: '', idle: 0, drawnAt: 0, drawnHover: -2,
+    tool: 'spikes', carry: null, power: null, speed: 1, previewError: null, follow: true, diff: 'easy', mode: 'campaign', pact: null, twists: [], challenge: null, hoverIt: null, groups: {},
+    touch: false, armed: -1, adPause: false, canSave: true, tut: 0,
+  });
   let G = null;
+  const P = RD.portal;
+  const sfx = (n) => RD.sfx(n);
 
   // ---------------------------------------------------------------- storage (best effort)
+  // The portal's data module when there is one (it syncs to the player's account), else localStorage.
   const store = {
-    del(k) { try { localStorage.removeItem('rd.' + k); } catch (e) { /* private mode */ } },
-    get(k, d) { try { const v = localStorage.getItem('rd.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
-    set(k, v) { try { localStorage.setItem('rd.' + k, JSON.stringify(v)); } catch (e) { /* private mode or full */ } },
+    del(k) { try { P.storage().removeItem('rd.' + k); } catch (e) { /* storage blocked */ } },
+    get(k, d) { try { const v = P.storage().getItem('rd.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { P.storage().setItem('rd.' + k, JSON.stringify(v)); } catch (e) { ui.canSave = false; } },
   };
-  ui.diff = store.get('diff', 'normal');
+  // ---------------------------------------------------------------- what carries over between dungeons
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const seedOf = (str) => { let h = 2166136261; for (const ch of str) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return (h >>> 0) % 1e6; };
+  const meta = () => ({ trophies: {}, slain: 0, runs: 0, best: {}, daily: {}, souls: 0, heart: {}, streak: 0, lastDay: null, gift: null, ...store.get('meta', {}) });
+  // the daily dungeon's two twists, the same for everyone on a given day
+  const dailyTwists = (day) => {
+    const rng = RD.makeRng(seedOf('rd-twists-' + day));
+    return rng.shuffle(Object.keys(RD.TWISTS)).slice(0, 2);
+  };
+  const yesterday = () => { const d = new Date(); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  // coming back on consecutive days keeps a streak; the first dungeon of each day pays a gift of souls
+  function touchStreak() {
+    const m = meta(), day = today();
+    if (m.lastDay === day) return;
+    m.streak = m.lastDay === yesterday() ? m.streak + 1 : 1;
+    m.lastDay = day;
+    store.set('meta', m);
+    if (m.streak >= 7) award('streak7');
+  }
+  function claimGift() {
+    const m = meta(), day = today();
+    if (m.gift === day) return 0;
+    const n = Math.min(20, 2 * m.streak);
+    m.gift = day;
+    m.souls += n;
+    store.set('meta', m);
+    return n;
+  }
+  const has = (id) => !!meta().trophies[id];
+  function award(id) {
+    const m = meta();
+    if (m.trophies[id] || !RD.TROPHIES[id]) return;
+    m.trophies[id] = today();
+    store.set('meta', m);
+    const pact = Object.entries(RD.PACTS).find(([, p]) => p.trophy === id);
+    setTimeout(() => toast(`Trophy: ${RD.TROPHIES[id].name}.${pact ? ` New pact unlocked: ${pact[1].name}.` : ''}`, true), 900);
+    sfx('level');
+    P.happytime();
+  }
+  // checks after a build action, and after a raid
+  function checkBuild(res, type) {
+    if (res.lv >= RD.MAX_LEVEL) award('maxed');
+    const d = type && RD.ITEMS[type];
+    if (d && d.boss) award('boss');
+    if (d && d.myth) award('myth');
+    if (d && d.lord) award('lord');
+    if (G.floors >= RD.BASE_FLOORS) award('deep');
+  }
+  function checkRaid(d) {
+    const m = meta();
+    m.slain += d.killed.length;
+    store.set('meta', m);
+    if (d.killed.length) award('first_blood');
+    if (d.killed.length >= 2 && !d.escaped.length) award('perfect');
+    if (d.killed.some((h) => h.title)) award('legend');
+    if (d.killed.some((h) => h.cls === 'chosen')) award('chosen');
+    if (d.killed.some((h) => h.nemesis)) award('nemesis');
+    const team = d.killed.concat(d.escaped).filter((h) => h.team);
+    if (team.length && team.every((h) => d.killed.includes(h))) award('hunters');
+    if (G.stats.held >= 5) award('survive5');
+    if (G.gold >= 500) award('rich');
+    if (m.slain >= 100) award('slay100');
+    if (G.phase !== 'over' && !(G.result === 'won')) return;
+    // the run is over: score it
+    if (G.mode === 'daily') award('daily');
+    if (G.result === 'won') {
+      award('win_any');
+      if (G.mode !== 'campaign') award('quick');
+      if (G.diff === 'hard' || G.diff === 'nightmare') award('win_hard');
+      if (G.diff === 'nightmare') award('win_abyss');
+      if ((G.twists || []).length >= 3) award('twisted');
+    }
+  }
+  function recordRun() {
+    const m = meta();
+    const score = RD.score(G);
+    const key = `${G.mode}:${G.diff}`;
+    const prev = m.best[key] || 0;
+    const souls = RD.souls(G);
+    m.souls += souls;
+    m.runs++;
+    if (score > prev) m.best[key] = score;
+    if (G.mode === 'daily' && G.daily) m.daily[G.daily] = Math.max(m.daily[G.daily] || 0, score);
+    store.set('meta', m);
+    return { score, best: Math.max(prev, score), isBest: score > prev, souls };
+  }
+
+  function probeStorage() {
+    try {
+      const s = P.storage();
+      s.setItem('rd.probe', '1');
+      ui.canSave = s.getItem('rd.probe') === '1';
+      s.removeItem('rd.probe');
+    } catch (e) { ui.canSave = false; }
+  }
 
   // ---------------------------------------------------------------- toast
   let toastT = 0;
@@ -29,6 +130,7 @@
     const t = $('toast');
     t.textContent = msg;
     t.className = 'toast show' + (good ? ' good' : '');
+    if (!good) sfx('error');
     clearTimeout(toastT);
     toastT = setTimeout(() => (t.className = 'toast'), good ? 3200 : 1800);
   }
@@ -48,8 +150,8 @@
     b.setAttribute('aria-pressed', ui.tool === type);
     const cv = el('canvas');
     RD.drawIcon(cv, type, 36);
-    const kind = d.boss ? (d.lord ? 'Demon Lord' : d.myth ? 'Myth boss' : 'Boss') : { trap: d.hidden ? 'Hidden trap' : 'Trap', turret: 'Wall piece', monster: d.elite ? 'Elite monster' : 'Monster', door: 'Obstacle' }[d.kind];
-    const sub = locked ? `Unlocks night ${RD.TIER_UNLOCK[d.tier]}` : `${kind}${sale ? ' · <span class="sale">30% OFF</span>' : ''}`;
+    const kind = d.boss ? (d.lord ? 'Demon Lord' : d.myth ? 'Myth boss' : 'Boss') : d.den ? 'Horde' : { trap: d.hidden ? 'Hidden trap' : 'Trap', turret: 'Wall piece', monster: d.elite ? 'Elite monster' : 'Monster', door: 'Obstacle', totem: 'Room', seal: 'Boss seal' }[d.kind];
+    const sub = locked ? `Unlocks night ${RD.realNight(G, RD.TIER_UNLOCK[d.tier])}` : `${kind}${sale ? ' · <span class="sale">30% OFF</span>' : ''}`;
     b.append(cv, el('span', 'name', `${tierTag(d.tier)} ${esc(d.name)}<small>${sub}</small>`), el('span', 'cost', locked ? '—' : cost));
     if (locked) b.disabled = true;
     else b.onclick = () => selectTool(type);
@@ -59,7 +161,7 @@
   function renderBlueprints() {
     const tools = $('tools');
     tools.innerHTML = '';
-    for (const k of ['dig', 'fill', 'move', 'upgrade', 'hoard', 'sell']) {
+    for (const k of ['inspect', 'dig', 'fill', 'move', 'upgrade', 'hoard', 'sell']) {
       const T = RD.TOOLS[k];
       const b = el('button', 'tool' + (ui.tool === k ? ' on' : ''));
       b.type = 'button';
@@ -72,15 +174,56 @@
       tools.append(b);
     }
     const top = RD.unlocked(G);
-    $('basic').replaceChildren(...RD.BASIC.map((t) => card(t)));
-    $('offers').replaceChildren(...(G.offers.length ? G.offers.map((t) => card(t, G.sale === t)) : [el('p', 'empty', 'Nothing yet. Higher-rank blueprints start turning up on night ' + RD.TIER_UNLOCK[1] + '.')]));
-    const bosses = RD.BOSSES.filter((b) => RD.ITEMS[b].tier <= top).map((b) => card(b));
-    const nextBoss = RD.BOSSES.find((b) => RD.ITEMS[b].tier > top);
-    if (nextBoss) bosses.push(card(nextBoss, false, true));
-    $('bosses').replaceChildren(...bosses);
+    $('offers').replaceChildren(...G.offers.map((t) => card(t, true)), dealsBar());
+    // the whole catalogue, newest ranks first; the next locked piece in each group shows when it opens
+    const box = $('catalog');
+    box.innerHTML = '';
+    for (const g of RD.GROUPS) {
+      const all = Object.keys(RD.ITEMS).filter((k) => RD.inGroup(g, k)).sort((a, b) => RD.ITEMS[b].tier - RD.ITEMS[a].tier || RD.ITEMS[a].cost - RD.ITEMS[b].cost);
+      const open = all.filter((k) => RD.ITEMS[k].tier <= top);
+      const next = all.filter((k) => RD.ITEMS[k].tier > top).sort((a, b) => RD.ITEMS[a].tier - RD.ITEMS[b].tier)[0];
+      const det = el('details', 'group');
+      det.open = ui.groups[g.id] !== false;
+      det.ontoggle = () => { ui.groups[g.id] = det.open; };
+      det.append(el('summary', null, `${esc(g.name)} <small>${open.length}</small>`));
+      const cards = el('div', 'cards');
+      cards.append(...open.map((t) => card(t, G.offers.includes(t))));
+      if (next) cards.append(card(next, false, true));
+      if (!open.length && !next) continue;
+      det.append(cards);
+      box.append(det);
+    }
     const nu = RD.nextUnlock(G);
     $('unlock').innerHTML = nu ? `Next: ${tierTag(nu.tier)} blueprints on night ${nu.night}: ${nu.items.map((k) => esc(RD.ITEMS[k].name)).join(', ')}.` : 'Every rank is open to you.';
     renderDetail();
+  }
+
+  // New deals for malice, or once a night after an optional ad where the portal has ads.
+  function dealsBar() {
+    const bar = el('div', 'reroll');
+    const cost = RD.rerollCost(G);
+    const paid = el('button', 'ghost small', `Reroll deals · <span class="m">${cost}</span>`);
+    paid.type = 'button';
+    paid.onclick = () => {
+      if (G.malice < cost) return toast(`Needs ${cost} malice.`);
+      G.malice -= cost;
+      RD.rerollDeals(G);
+      sfx('sell');
+      afterBuild();
+    };
+    bar.append(paid);
+    if (P.ads && G.adReroll !== G.raid) {
+      const free = el('button', 'ghost small rewarded', '🎬 Reroll free');
+      free.type = 'button';
+      free.onclick = () => P.rewarded((ok) => {
+        if (!ok) return;
+        G.adReroll = G.raid;
+        RD.rerollDeals(G);
+        afterBuild();
+      });
+      bar.append(free);
+    }
+    return bar;
   }
 
   function statTable(type, lv, next) {
@@ -94,6 +237,7 @@
 
   // The detail panel describes whatever you are pointing at: a placed piece, else the selected blueprint or tool.
   function renderDetail() {
+    $('cancel').hidden = ui.carry == null;
     const box = $('detail');
     const it = ui.hoverIt && G.items.get(ui.hoverIt.tile) === ui.hoverIt ? ui.hoverIt : null;
     if (it && G.phase === 'build') {
@@ -102,24 +246,27 @@
       const max = lv >= RD.MAX_LEVEL;
       let foot = '';
       if (ui.tool === 'upgrade') foot = max ? `<p class="foot">Lv${RD.MAX_LEVEL} is the most a ${RD.TIERS[d.tier]}-rank piece can reach. A higher-rank piece is the next step.</p>` : `<p class="foot">Level up to Lv${lv + 1} for <b class="m">${RD.levelCost(it)}</b> malice.</p>`;
-      if (ui.tool === 'sell') foot = `<p class="foot">Sell for <b class="m">${Math.round((d.cost + (it.paid || 0)) * 0.6)}</b> malice.</p>`;
+      if (ui.tool === 'sell') foot = `<p class="foot">Sell for <b class="m">${RD.refund(it)}</b> malice.</p>`;
       box.innerHTML = `<b>${tierTag(d.tier)} ${esc(d.name)} <span class="lv">Lv${lv}/${RD.MAX_LEVEL}</span></b>${statTable(it.type, lv, ui.tool === 'upgrade' && !max)}${foot}`;
       return;
     }
     if (RD.ITEMS[ui.tool]) {
       const d = RD.ITEMS[ui.tool];
       const cost = RD.costOf(G, ui.tool);
-      box.innerHTML = `<b>${tierTag(d.tier)} ${esc(d.name)} · <span class="m">${cost}</span></b>${esc(d.desc)}${statTable(ui.tool, 1, false)}`;
+      box.innerHTML = `<b>${tierTag(d.tier)} ${esc(d.name)} · <span class="m">${cost}</span></b>${esc(d.desc)}${statTable(ui.tool, 1, false)}<button type="button" class="ghost small" id="piece-more">Full details</button>`;
+      const t = ui.tool;
+      box.querySelector('#piece-more').onclick = () => showPiece(t);
       return;
     }
     const d = RD.TOOLS[ui.tool];
     let extra = '';
-    if (ui.tool === 'move' && ui.carry != null) extra = `<br><em>Carrying the ${esc(RD.ITEMS[G.items.get(ui.carry).type].name.toLowerCase())} from ${RD.coord(ui.carry)}. Click a tile to set it down (switch floors to carry it deeper), or Esc to cancel.</em>`;
+    if (ui.tool === 'move' && ui.carry != null) extra = `<br><em>Carrying the ${esc(RD.ITEMS[G.items.get(ui.carry).type].name.toLowerCase())} from ${RD.coord(ui.carry)}. Pick a tile to set it down (switch floors to carry it deeper), or Cancel.</em>`;
     const cost = RD.costOf(G, ui.tool);
     box.innerHTML = `<b>${esc(d.name)}${cost ? ` · <span class="m">${cost}</span>` : ''}</b>${esc(d.desc)}${extra}`;
   }
 
   // ---------------------------------------------------------------- floors
+  // Choosing a floor during a raid turns off auto-follow until you press Follow heroes again.
   function setFloor(f, manual) {
     if (f < 0 || f >= G.floors) return;
     if (manual && G.phase === 'raid') ui.follow = false;
@@ -128,40 +275,94 @@
     renderFloors();
   }
 
+  // The floor buttons are built once per layout and then only updated in place, so a click that lands
+  // while the hero counts change is never lost.
   function renderFloors() {
     const box = $('floors');
-    box.innerHTML = '';
+    const R = G.R, raid = G.phase === 'raid';
+    const digErr = G.floors < RD.maxFloors(G) && G.phase === 'build' ? RD.canOpenFloor(G) || '' : null;
+    const shape = `${G.floors}|${raid}|${G.phase}|${digErr}|${G.hoard}|${(G.themes || []).join()}|${[...G.items.values()].filter((it) => RD.ITEMS[it.type].boss || it.type === 'seal').map((it) => it.type + it.tile).join()}`;
+    if (shape !== ui.floorShape) {
+      ui.floorShape = shape;
+      box.innerHTML = '';
+      for (let f = 0; f < G.floors; f++) {
+        const b = el('button', 'floor');
+        b.type = 'button';
+        b.dataset.f = f;
+        const hoard = RD.fl(G.hoard) === f ? '<i class="dot gold" title="The hoard"></i>' : '';
+        const boss = [...G.items.values()].find((it) => RD.fl(it.tile) === f && RD.ITEMS[it.type].boss);
+        const th = RD.themeOf(G, f * RD.N);
+        const sealed = [...G.items.values()].some((it) => it.type === 'seal' && RD.fl(it.tile) === f);
+        b.title = `${th.name}: ${th.desc}${boss ? ` Boss: ${RD.ITEMS[boss.type].name}.` : ''}${sealed ? ' Sealed while the boss lives.' : ''}`;
+        b.innerHTML = `Floor ${RD.ROMAN[f]}${hoard}${G.themes && G.themes[f] && G.themes[f] !== 'halls' ? ` <small class="theme">${esc(th.name)}</small>` : ''}${boss ? ` <small>${sealed ? '🔒 ' : ''}${esc(RD.ITEMS[boss.type].name)}</small>` : ''} <span class="count" hidden></span>`;
+        b.onclick = () => setFloor(f, true);
+        box.append(b);
+      }
+      if (raid) {
+        const fb = el('button', 'floor follow', 'Follow heroes');
+        fb.type = 'button';
+        fb.id = 'follow';
+        fb.title = 'Keep the view on the floor where the heroes are';
+        fb.onclick = () => { ui.follow = !ui.follow; follow(); renderFloors(); };
+        box.append(fb);
+      }
+      if (digErr != null) {
+        const b = el('button', 'floor dig' + (digErr ? ' wait' : ''));
+        b.type = 'button';
+        b.innerHTML = G.raid < RD.floorNight(G, G.floors) ? `Floor ${RD.ROMAN[G.floors]} <small class="n">night ${RD.floorNight(G, G.floors)}</small>` : `+ Dig floor ${RD.ROMAN[G.floors]} <span class="m">${RD.floorCost(G)}</span>`;
+        b.title = digErr || 'Dig a new floor below. Your hoard is carried down to it.';
+        b.onclick = () => {
+          const err = RD.canOpenFloor(G);
+          if (err) return toast(err);
+          pickTheme((theme) => digFloor(theme));
+        };
+        box.append(b);
+      }
+    }
+    // in place: which floor is shown, and how many heroes are on each
+    updateFloors();
+  }
+
+  // digging a floor: choose one of three themes for it
+  function pickTheme(done) {
+    const opts = RD.themeChoices(G);
+    openModal(`
+      <p class="eyebrow">Floor ${RD.ROMAN[G.floors]} · ${RD.floorCost(G)} malice</p>
+      <h2 id="sheet-title">What lies below?</h2>
+      <p class="lede">Choose what this floor becomes. Pieces that match its theme are stronger here.</p>
+      <div class="diffs themes">${opts.map((k) => `<button type="button" class="diff theme-pick" data-k="${k}"><b>${esc(RD.THEMES[k].name)}</b><span>${esc(RD.THEMES[k].desc)}</span></button>`).join('')}</div>
+      <div class="seedrow"><button type="button" class="ghost" id="cancel-dig">Not yet</button></div>`, (s) => {
+      for (const b of s.querySelectorAll('.theme-pick')) b.onclick = () => { closeModal(); done(b.dataset.k); };
+      s.querySelector('#cancel-dig').onclick = () => closeModal();
+    });
+  }
+  function digFloor(theme) {
+    const res = RD.openFloor(G, theme);
+    if (res.err) return toast(res.err);
+    setFloor(res.floor);
+    RD.view.dirty = true;
+    sfx('dig');
+    P.happytime();
+    checkBuild({}, null);
+    save();
+    renderAll();
+    toast(`Floor ${RD.ROMAN[res.floor]} (${RD.THEMES[G.themes[res.floor]].name}) is dug. Stairs at ${RD.coord(res.stairs)}, and your hoard was carried down to ${RD.coord(G.hoard)}.`, true);
+  }
+  function updateFloors() {
+    const box = $('floors');
     const R = G.R;
-    for (let f = 0; f < G.floors; f++) {
-      const b = el('button', 'floor' + (RD.view.floor === f ? ' on' : ''));
-      b.type = 'button';
+    for (const b of box.querySelectorAll('[data-f]')) {
+      const f = +b.dataset.f;
+      b.classList.toggle('on', RD.view.floor === f);
+      b.setAttribute('aria-pressed', RD.view.floor === f);
       let n = 0;
       if (R) for (const h of R.heroes) if (RD.heroAlive(h) && RD.fl(h.tile) === f) n++;
-      const hoard = RD.fl(G.hoard) === f ? '<i class="dot gold" title="The hoard"></i>' : '';
-      const boss = [...G.items.values()].find((it) => RD.fl(it.tile) === f && RD.ITEMS[it.type].boss);
-      b.innerHTML = `Floor ${RD.ROMAN[f]}${hoard}${boss ? ` <small>${esc(RD.ITEMS[boss.type].name)}</small>` : ''}${n ? ` <span class="count">${n}</span>` : ''}`;
-      b.setAttribute('aria-pressed', RD.view.floor === f);
-      b.onclick = () => setFloor(f, true);
-      box.append(b);
+      const c = b.querySelector('.count');
+      if (c.textContent !== String(n)) c.textContent = n;
+      c.hidden = !n;
     }
-    if (G.floors < RD.MAX_FLOORS && G.phase === 'build') {
-      const err = RD.canOpenFloor(G);
-      const night = RD.FLOOR_UNLOCK[G.floors];
-      const b = el('button', 'floor dig' + (err ? ' wait' : ''));
-      b.type = 'button';
-      b.innerHTML = G.raid < night ? `Floor ${RD.ROMAN[G.floors]} <small>night ${night}</small>` : `+ Dig floor ${RD.ROMAN[G.floors]} <span class="m">${RD.FLOOR_COST[G.floors]}</span>`;
-      b.title = err || 'Dig a new floor below. Your hoard is carried down to it.';
-      b.onclick = () => {
-        const res = RD.openFloor(G);
-        if (res.err) return toast(res.err);
-        setFloor(res.floor);
-        RD.view.dirty = true;
-        save();
-        renderAll();
-        toast(`Floor ${RD.ROMAN[res.floor]} is dug. Stairs at ${RD.coord(res.stairs)}, and your hoard was carried down to ${RD.coord(G.hoard)}.`, true);
-      };
-      box.append(b);
-    }
+    const fb = $('follow');
+    if (fb) { fb.classList.toggle('on', ui.follow); fb.setAttribute('aria-pressed', ui.follow); }
   }
 
   // ---------------------------------------------------------------- ledger
@@ -170,8 +371,8 @@
     const cv = el('canvas');
     RD.heroIcon(cv, h, 28);
     const C = RD.CLASSES[h.cls];
-    const chips = (h.traits || []).map((t) => `<span class="chip${t === 'stone' ? ' stone' : ''}" title="${esc(RD.TRAITS[t].desc)}">${esc(RD.TRAITS[t].name)}</span>`).join('');
-    const vet = h.lvl > 1 ? `<span class="chip vet" title="Survived an earlier raid and came back stronger">Returns ×${h.lvl - 1}</span>` : '';
+    const chips = (h.traits || []).map((t) => `<span class="chip${t === 'stone' ? ' stone' : ''}" title="${esc(RD.TRAITS[t].desc)}"><span class="ti" aria-hidden="true">${RD.TRAITS[t].icon}</span>${esc(RD.TRAITS[t].name)}</span>`).join('');
+    const vet = h.lvl > 1 ? `<span class="chip vet" title="Earned it in an earlier raid: fought, looted or mapped, and came back stronger">Veteran ×${h.lvl - 1}</span>` : '';
     let state = '';
     if (live) {
       const st = { seek: h.K && h.K.hoard >= 0 ? 'heading for the hoard' : 'exploring', loot: 'looting', escape: 'leaving with gold', flee: 'running', dead: 'dead', out: h.carry ? `escaped with ${h.carry} gold` : 'escaped' };
@@ -181,8 +382,16 @@
     }
     const hp = live ? Math.max(0, Math.ceil(h.hp)) : h.maxHp;
     li.title = `${C.desc}\nHealth ${h.maxHp} · Damage ${Math.round(h.dmg)} every ${h.rate}s`;
-    li.innerHTML = `<span></span><div class="who"><b>${tierTag(h.tier)} ${esc(h.name)}</b><small>${h.title ? `<em>${esc(h.title)}</em> · ` : ''}${C.name}${live ? ' · ' : ''}</small>${state}<div class="chips">${vet}${chips}</div>${live ? `<div class="bar"><i style="width:${(100 * hp) / h.maxHp}%"></i></div>` : ''}</div><span class="hp">${hp}<br><small>hp</small></span>`;
+    const prey = h.hunt != null && G.items.get(h.hunt);
+    const wanted = h.nemesis ? `<span class="chip wanted" title="Escaped you ${h.escapes} times. Killing them pays a triple bounty.">Nemesis · escaped ${h.escapes}×</span>` : '';
+    const hunt = h.hunt != null ? `<span class="chip hunt" title="Part of a strike team. Goes for this boss before the hoard.">Hunting ${prey ? esc(RD.ITEMS[prey.type].name) : 'a boss'}</span>` : '';
+    li.innerHTML = `<span></span><div class="who"><b>${tierTag(h.tier)} ${esc(h.name)}</b><small>${h.title ? `<em>${esc(h.title)}</em> · ` : ''}${C.name}${live ? ' · ' : ''}</small>${state}<div class="chips">${wanted}${hunt}${vet}${chips}</div>${live ? `<div class="bar"><i style="width:${(100 * hp) / h.maxHp}%"></i></div>` : ''}</div><span class="hp">${hp}<br><small>hp</small></span>`;
     li.firstChild.replaceWith(cv);
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.title += '\nClick for full details.';
+    li.onclick = () => showHero(h);
+    li.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showHero(h); } };
     return li;
   }
 
@@ -192,6 +401,9 @@
     $('adapt').textContent = live ? '' : G.adapt;
     $('adapt').hidden = !!live;
     const list = live ? G.R.heroes.concat(G.R.queue) : G.party;
+    const key = (live ? 'L' : 'B') + list.map((h) => `${h.id}:${h.state}:${Math.ceil(h.hp)}:${h.carry || 0}:${h.tile != null ? RD.fl(h.tile) : ''}`).join('|');
+    if (key === ui.partyKey) return;
+    ui.partyKey = key;
     $('party').replaceChildren(...list.map((h) => heroRow(h, live)));
   }
 
@@ -207,6 +419,9 @@
     const last = G.history[0];
     $('log-h').textContent = raid ? 'Raid log' : last ? `Last raid · night ${last.raid}` : 'Raid log';
     const L = raid ? G.R.log : last ? last.log : [];
+    const key = `${raid ? 'R' : 'H'}${L.length}:${L[0] ? L[0].t + L[0].text : ''}`;
+    if (key === ui.logKey) return;
+    ui.logKey = key;
     $('log').innerHTML = L.length ? logItems(L) : '<p class="empty">Quiet. Nothing has happened yet.</p>';
     $('reports').hidden = !G.history.length;
   }
@@ -223,15 +438,18 @@
   }
   function renderStats() {
     setStat('st-raid', G.endless ? `${G.raid}` : `${G.raid} / ${RD.winAt(G)}`);
+    $('st-raid').parentNode.title = `${RD.modeOf(G).name} · ${RD.DIFF[G.diff].name}${G.pact ? ' · ' + RD.PACTS[G.pact].name : ''}`;
     setStat('st-gold', String(G.gold));
     setStat('st-malice', String(G.malice));
     const t = Math.round(G.guild.threat);
-    setStat('st-rating', RD.TIERS[t], RD.TIER_COLOR[t]);
+    setStat('st-rating', RD.TIERS[t] + (G.guild.renown > 0.005 ? '+' : ''), RD.TIER_COLOR[t]);
+    $('st-rating').parentNode.title = `What the guild thinks your dungeon is worth.${G.guild.renown > 0.005 ? ` Renown +${Math.round(G.guild.renown * 100)}%: every night they fail to take gold, they train harder.` : ''}`;
     setStat('st-known', Math.round(RD.coverage(G, G.guild.K) * 100) + '%');
   }
 
   function renderOmen() {
-    $('omen').innerHTML = `<span class="tag">Tonight’s omen</span><b>${esc(G.omen.name)}</b><span>${esc(G.omen.text)}</span>`;
+    const tw = (G.twists || []).map((k) => `<b class="twist" title="${esc(RD.TWISTS[k].desc)}">${esc(RD.TWISTS[k].name)}</b>`).join('');
+    $('omen').innerHTML = `<span class="tag">Tonight’s omen</span><b>${esc(G.omen.name)}</b>${tw}<span>${esc(G.omen.text)}</span>`;
   }
 
   function renderPhase() {
@@ -242,34 +460,61 @@
     if (raid) renderPowers();
   }
 
+  // the raid's power bar: open powers, plus the next one to come with the night it opens
   function renderPowers() {
     const box = $('powers');
     box.innerHTML = '';
-    for (const k of Object.keys(RD.POWERS)) {
+    const keys = Object.keys(RD.POWERS);
+    const next = keys.find((k) => !RD.powerOpen(G, k));
+    for (const k of keys) {
+      const open = RD.powerOpen(G, k);
+      if (!open && k !== next) continue;
       const p = RD.POWERS[k];
-      const b = el('button', 'power' + (ui.power === k ? ' on' : ''));
+      const b = el('button', 'power' + (ui.power === k ? ' on' : '') + (open ? '' : ' locked'));
       b.type = 'button';
       b.dataset.power = k;
-      b.title = p.desc;
+      b.title = open ? `${p.name}: ${p.desc}` : `${p.name} opens on night ${RD.realNight(G, p.night)}. ${p.desc}`;
       const cv = el('canvas');
-      RD.drawIcon(cv, k, 28);
-      b.append(cv, el('span', null, `${p.name} <span class="cost">${p.cost}</span>`), el('i', 'cool'));
+      RD.drawIcon(cv, k === 'seal' ? 'power:seal' : k, 28);
+      b.append(cv, el('span', null, `<span class="pname">${esc(p.name)}</span> <span class="cost">${open ? RD.powerCost(G, k) : 'night ' + RD.realNight(G, p.night)}</span>`), el('i', 'cool'));
+      const tip = () => powerTip(k);
+      b.onmouseenter = tip;
+      b.onfocus = tip;
+      b.onmouseleave = b.onblur = () => powerTip(ui.power);
       b.onclick = () => {
-        if (k === 'douse') {
-          const err = RD.usePower(G, 'douse');
-          toast(err || 'The torches gutter out.', !err);
+        if (!open) { powerTip(k); return toast(`${p.name} opens on night ${RD.realNight(G, p.night)}.`); }
+        if (!p.target) {
+          const err = RD.usePower(G, k);
+          toast(err || `${p.name}!`, !err);
           ui.power = null;
-        } else ui.power = ui.power === k ? null : k;
+        } else {
+          ui.power = ui.power === k ? null : k;
+          if (ui.power) toast(`${p.name}: pick a tile on the map.`, true);
+        }
+        ui.armed = -1;
         renderPowers();
+        tickPowers();
+        powerTip(ui.power || k);
+        if (!ui.power) setTimeout(() => { if (!ui.power) powerTip(null); }, 2500);
       };
       box.append(b);
     }
+    box.classList.toggle('compact', box.children.length > 7);
+  }
+  function powerTip(k) {
+    const t = $('ptip');
+    if (!k || G.phase !== 'raid') { t.hidden = true; return; }
+    const p = RD.POWERS[k];
+    const open = RD.powerOpen(G, k);
+    t.innerHTML = `<b>${esc(p.name)}</b> <span class="m">${open ? RD.powerCost(G, k) + ' malice' : 'opens night ' + RD.realNight(G, p.night)}</span> · recovers in ${p.cd}s${ui.power === k ? ' · <em>pick a tile</em>' : ''}<br>${esc(p.desc)}`;
+    t.hidden = false;
   }
   function tickPowers() {
     for (const b of document.querySelectorAll('.power')) {
       const k = b.dataset.power;
+      if (!RD.powerOpen(G, k)) { b.disabled = false; continue; }
       const cd = G.R.powers[k];
-      b.disabled = cd > 0 || G.malice < RD.POWERS[k].cost;
+      b.disabled = cd > 0 || G.malice < RD.powerCost(G, k);
       b.querySelector('.cool').style.width = cd > 0 ? (100 * cd) / RD.POWERS[k].cd + '%' : '0';
     }
   }
@@ -298,25 +543,35 @@
     if (ui.hoverIt !== prevHover) renderDetail();
     if (i < 0 || G.phase !== 'build') { ui.previewError = null; return; }
     if (ui.tool === 'move') ui.previewError = ui.carry != null ? RD.check(G, 'move', i, ui.carry) : G.items.has(i) ? null : 'Pick a piece to move.';
+    else if (ui.tool === 'inspect') ui.previewError = G.items.has(i) ? null : 'Nothing to inspect here.';
     else ui.previewError = RD.check(G, ui.tool, i);
     const it = G.items.get(i);
     let what = it ? ` · ${RD.TIERS[RD.ITEMS[it.type].tier]}-rank ${RD.ITEMS[it.type].name} Lv${it.lv || 1}` : i === G.hoard ? ' · the hoard' : RD.isGate(G, i) ? (i === G.entrance ? ' · the gate' : ' · stairs up') : RD.isStairs(G, i) ? ' · stairs down' : '';
     if (it && ui.tool === 'upgrade' && !ui.previewError) what += ` · Lv${(it.lv || 1) + 1} for ${RD.levelCost(it)} malice`;
-    $('hint').innerHTML = `<b>${RD.coord(i)}</b>${esc(what)}${ui.previewError ? ' · ' + esc(ui.previewError) : ''}`;
+    const confirm = ui.touch && ui.armed === i && !ui.previewError ? ' · tap again to confirm' : '';
+    $('hint').innerHTML = `<b>${RD.coord(i)}</b>${esc(what)}${ui.previewError ? ' · ' + esc(ui.previewError) : ''}${confirm}`;
   }
 
   function click(i) {
     if (i < 0) return;
     if (G.phase === 'raid') {
-      if (ui.power === 'tremor') {
-        const err = RD.usePower(G, 'tremor', i);
-        if (err) toast(err);
+      if (ui.power && RD.POWERS[ui.power].target) {
+        const err = RD.usePower(G, ui.power, i);
+        if (err) return toast(err);
         ui.power = null;
         renderPowers();
+        tickPowers();
+        return;
       }
+      if (!ui.power) inspectAt(i);
       return;
     }
     if (G.phase !== 'build') return;
+    if (ui.tool === 'inspect') {
+      const it = G.items.get(i);
+      if (!it) return toast('Nothing here. Click a placed piece.');
+      return showPiece(it.type, { it });
+    }
     if (ui.tool === 'move') {
       if (ui.carry == null) {
         if (!G.items.has(i)) return toast('Pick up a piece first.');
@@ -328,6 +583,7 @@
       const res = RD.apply(G, 'move', i, ui.carry);
       if (res.err) return toast(res.err);
       ui.carry = null;
+      sfx('place');
       renderDetail();
       afterBuild();
       return;
@@ -335,6 +591,9 @@
     const res = RD.apply(G, ui.tool, i);
     if (res.err) return toast(res.err);
     if (res.map) RD.view.dirty = true;
+    sfx(res.map ? 'dig' : res.lv ? 'level' : res.gained ? 'sell' : 'place');
+    if (RD.ITEMS[ui.tool]) tutorial('placed', RD.ITEMS[ui.tool]);
+    checkBuild(res, RD.ITEMS[ui.tool] ? ui.tool : null);
     const [x, y] = RD.xy(i);
     if (res.spent) RD.floater(x + 0.5, y + 0.3, '−' + res.spent, RD.PAL.maliceHi);
     if (res.gained) RD.floater(x + 0.5, y + 0.3, '+' + res.gained, RD.PAL.maliceHi);
@@ -343,6 +602,18 @@
     afterBuild();
     ui.hoverIt = null;
     preview(RD.view.hover);
+  }
+
+  // during a raid: the hero or monster nearest the click, else the piece on that tile
+  function inspectAt(i) {
+    const [cx, cy] = [RD.xy(i)[0] + 0.5, RD.xy(i)[1] + 0.5], f = RD.fl(i);
+    const near = (list) => list.filter((a) => a.tile != null && RD.fl(a.tile) === f && Math.hypot(a.x - cx, a.y - cy) <= 0.8).sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy))[0];
+    const h = near(G.R.heroes.filter(RD.heroAlive));
+    if (h) return showHero(h);
+    const m = near(G.R.monsters.filter((x) => !x.dead));
+    if (m) return showPiece(m.type, { m });
+    const it = G.items.get(i);
+    if (it) return showPiece(it.type, { it });
   }
 
   function afterBuild() {
@@ -362,23 +633,31 @@
     ui.follow = true;
     RD.startRaid(G);
     setFloor(0);
+    sfx('gate');
+    hideDispatch();
+    $('ptip').hidden = true;
+    ui.stopT = ui.slowT = 0;
+    bark('gate', null, 1);
+    tutorial('raid');
     renderAll();
   }
 
   // during a raid, keep the camera on the floor where the heroes are
   function follow() {
-    if (!ui.follow || !G.R) return;
+    if (!G.R || !ui.follow) return;
     const live = G.R.heroes.filter(RD.heroAlive);
     if (!live.length || live.some((h) => RD.fl(h.tile) === RD.view.floor)) return;
     setFloor(Math.max(...live.map((h) => RD.fl(h.tile))));
   }
 
+  const canRevive = () => P.ads && G.result === 'lost' && !G.stats.revived;
   RD.onRaidEnd = function () {
+    $('ptip').hidden = true;
+    checkRaid(G.debrief);
     renderAll();
-    saveRecord();
-    if (G.phase === 'over') store.del('save');
-    else store.set('save', RD.saveGame(G, true));
-    setTimeout(() => showDebrief(), 700);
+    if (G.phase === 'over' && !canRevive()) { saveRecord(); store.del('save'); }
+    else if (G.phase !== 'over') store.set('save', RD.saveGame(G, true));
+    setTimeout(() => showDebrief(), ui.slowT > 0 ? 1900 : 700);
   };
 
   function setSpeed(s) {
@@ -389,84 +668,525 @@
   // what tonight brings that last night did not
   function announce() {
     const top = RD.unlocked(G);
+    G.raid--;
+    const was = RD.unlocked(G);
+    G.raid++;
     const msgs = [];
-    if (RD.TIER_UNLOCK[top] === G.raid && top > 0) msgs.push(`${RD.TIERS[top]}-rank blueprints unlocked`);
-    if (G.floors < RD.MAX_FLOORS && RD.FLOOR_UNLOCK[G.floors] === G.raid) msgs.push(`floor ${RD.ROMAN[G.floors]} can be dug`);
+    if (top > was && G.raid > 1) msgs.push(`${RD.TIERS[top]}-rank blueprints unlocked`);
+    if (G.floors < RD.maxFloors(G) && RD.floorNight(G, G.floors) === G.raid) msgs.push(`floor ${RD.ROMAN[G.floors]} can be dug`);
+    if (msgs.length) toast(msgs.join(' · '), true);
+    P.context({ night: G.raid, difficulty: G.diff, mode: G.mode });
+    showDispatch();
+    const d = G.history[0];
+    if (G.party.some((h) => h.title)) return; // the dispatch has the Core greet the legend
+    if (G.gold < 40) bark('thin', null, 2);
+    else if (d && d.killed.length >= 2 && !d.escaped.length) bark('perfect', null, 1);
+    else if (d && d.goldLost > 0) bark('robbed', { g: d.goldLost }, 1);
+    else bark('night', { night: G.raid, k: G.party.length }, 1);
+  }
+
+  // ---------------------------------------------------------------- the dungeon's voice
+  // One line at a time. A more important line can cut in; the same kind of quip waits a while before repeating.
+  const voice = { until: 0, prio: -1, last: {}, timer: 0 };
+  const heroVals = (h) => ({ n: h.name, t: h.title || '', c: RD.CLASSES[h.cls].name.toLowerCase(), g: h.carry || 0 });
+  function bark(key, vals, prio, chance) {
+    if (ui.tut || (chance != null && Math.random() > chance)) return;
+    const now = performance.now();
+    if (now < voice.until && (prio || 0) <= voice.prio) return;
+    if (now - (voice.last[key] || -1e9) < 9000 && (prio || 0) < 2) return;
+    const pool = key.startsWith('power.') ? RD.VOICE.power[key.slice(6)] : RD.VOICE[key];
+    if (!pool || !pool.length) return;
+    const line = pool[Math.floor(Math.random() * pool.length)].replace(/\{(\w+)\}/g, (_, k) => (vals && vals[k] != null ? vals[k] : ''));
+    voice.last[key] = now;
+    voice.prio = prio || 0;
+    voice.until = now + 2400 + line.length * 40;
+    $('voice-text').textContent = line;
+    const box = $('voice');
+    box.classList.remove('show');
+    void box.offsetWidth;
+    box.classList.add('show');
+    clearTimeout(voice.timer);
+    voice.timer = setTimeout(() => { box.classList.remove('show'); voice.prio = -1; }, voice.until - now);
+  }
+
+  // ---------------------------------------------------------------- game feel
+  // hit-stop: the raid holds still for a few frames on a heavy blow; the last kill of a night plays in slow motion
+  function hitStop(s) { ui.stopT = Math.max(ui.stopT || 0, s); }
+  function slowMo() {
+    ui.slowT = 1.6;
+    const w = $('board-wrap');
+    w.classList.remove('slowmo');
+    void w.offsetWidth;
+    w.classList.add('slowmo');
+    clearTimeout(ui.slowTimer);
+    ui.slowTimer = setTimeout(() => w.classList.remove('slowmo'), 1700);
+  }
+  RD.onEvent = function (type, d) {
+    if (!G || !G.R || G.phase !== 'raid') return;
+    const R = G.R;
+    if (type === 'kill') {
+      const left = R.heroes.some(RD.heroAlive) || R.queue.length;
+      hitStop(d.title || d.nemesis ? 0.16 : 0.07);
+      if (!left) { slowMo(); bark('last', heroVals(d), 3); }
+      else if (d.nemesis) bark('nemesisKill', heroVals(d), 3);
+      else if (d.title) bark('legendKill', heroVals(d), 3);
+      else if (R.killed.length === 1) bark('first', heroVals(d), 2);
+      else bark('kill', heroVals(d), 1, 0.6);
+    } else if (type === 'bigHit') hitStop(0.05);
+    else if (type === 'bossDown') { hitStop(0.2); bark('bossDown', { m: d.d.name }, 3); }
+    else if (type === 'escape') bark(d.carry ? 'escapeGold' : 'escape', heroVals(d), d.carry ? 3 : 2);
+    else if (type === 'loot') bark('loot', heroVals(d), 2);
+    else if (type === 'flee') bark('flee', heroVals(d), 0, 0.5);
+    else if (type === 'power') bark('power.' + d, null, 1, 0.7);
+  };
+
+  // ---------------------------------------------------------------- the guild's dispatch
+  // Who is coming tonight, what each of them does, and why the guild picked them.
+  function showDispatch() {
+    if (ui.tut || !G.party.length) return hideDispatch();
     const legend = G.party.find((h) => h.title);
-    if (legend) msgs.push(`a legend is coming: ${legend.name} ${legend.title}`);
-    toast(`Night ${G.raid}. ${G.party.length} heroes are coming${msgs.length ? '. ' + msgs.join(', ') : ''}.`, true);
+    $('dispatch-title').textContent = `Night ${G.raid}: ${G.party.length} heroes`;
+    $('dispatch-list').replaceChildren(...G.party.map((h) => {
+      const C = RD.CLASSES[h.cls];
+      const li = el('li', h.title ? 'legend' : '');
+      const cv = el('canvas');
+      RD.heroIcon(cv, h, 28);
+      const icons = (h.traits || []).map((t) => `<span class="ti" title="${esc(RD.TRAITS[t].name + ': ' + RD.TRAITS[t].desc)}">${RD.TRAITS[t].icon}</span>`).join('');
+      const role = C.desc.replace(/^Unique\.\s*/, '').split('. ')[0].replace(/\.$/, '');
+      const prey = h.hunt != null && G.items.get(h.hunt);
+      li.innerHTML = `<span></span><div><b>${tierTag(h.tier)} ${esc(h.name)}${h.title ? ` <em>${esc(h.title)}</em>` : ''}</b> ${icons}<small>${esc(C.name)}${h.lvl > 1 ? ' · veteran' : ''}${h.nemesis ? ' · nemesis' : ''}${prey ? ` · hunting your ${esc(RD.ITEMS[prey.type].name)}` : ''}. ${esc(role)}.</small></div>`;
+      li.firstChild.replaceWith(cv);
+      li.tabIndex = 0;
+      li.setAttribute('role', 'button');
+      li.title = 'Click for full details';
+      li.onclick = () => showHero(h);
+      li.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showHero(h); } };
+      return li;
+    }));
+    $('dispatch-note').textContent = G.adapt || '';
+    $('dispatch').hidden = false;
+    if (legend) bark('legend', heroVals(legend), 2);
+  }
+  function hideDispatch() { $('dispatch').hidden = true; }
+
+  // ---------------------------------------------------------------- heroes up close
+  const pct = (v) => Math.round(v * 100) + '%';
+  const DETECT = { mech: 'mechanisms', magic: 'magic', illusion: 'illusions' };
+  // what a class can do, in numbers; `h` (optional) scales heals and door-bashing to that hero's rank
+  function abilities(cls, h) {
+    const C = RD.CLASSES[cls], sc = h && h.dmg ? h.dmg / C.dmg : 1, out = [];
+    if (C.heal) out.push(`Heals allies within ${C.healR} tiles for ${(C.heal * sc).toFixed(1)} health a second`);
+    if (C.revive) out.push('Raises the first ally who falls on the same floor, at half health, once a raid');
+    if (C.cure) out.push(`Frees allies within ${C.cure} tiles from pins, dazes and slows`);
+    if (C.holy) out.push(`${C.holy}× damage to the undead`);
+    if (C.slayer) out.push(`${C.slayer}× damage to bosses`);
+    if (C.bane) out.push(`3× damage to ${C.bane} monsters`);
+    if (C.firstStrike) out.push(`${C.firstStrike}× damage on the first hit against each monster`);
+    if (C.cleave) out.push(`Every swing hits all monsters within ${C.cleave} tiles`);
+    if (C.splash) out.push(`Attacks splash every monster within ${C.splash} tiles for 60%`);
+    if (C.rage) out.push('Hits harder as it bleeds, up to double near death');
+    if (C.lifesteal) out.push(`Heals ${pct(C.lifesteal)} of the damage it deals`);
+    if (C.inspire) out.push('Allies within 2½ tiles deal 25% more damage, move 10% faster and hold their nerve');
+    if (C.taunt) out.push(`Draws every monster within ${C.taunt} tiles onto itself`);
+    if (C.guard) out.push(`Takes ${pct(1 - C.guard)} less damage`);
+    if (C.dodge) out.push(`Dodges ${pct(C.dodge)} of blows`);
+    if (C.fireward) out.push(`Takes ${pct(1 - C.fireward)} less damage from blasts`);
+    if (C.unbound) out.push('Shrugs off pins, slows and cages');
+    if (C.tame) out.push(`Calms a beast of its rank or lower within ${C.tame} tiles (every 12s)`);
+    if (C.detect) out.push(`Spots hidden traps within ${C.detectR} tiles: ${Object.entries(C.detect).map(([k, v]) => `${DETECT[k]} ${pct(v)}`).join(', ')}`);
+    if (C.disarm) out.push(`Disarms a known trap in ${C.disarm}s, and jams wall traps that hit it (${(C.disarm * 3).toFixed(1)}s)`);
+    if (C.pick) out.push(`Picks a locked door in ${C.pick}s`);
+    else out.push(`Batters doors for ${Math.round(C.bash * sc)} a second`);
+    if (C.sealwalker) out.push('Walks through Boss Seals');
+    if (C.thief) out.push(`Steals ${C.thief}× as much gold`);
+    return out;
+  }
+  function heroStats(h) {
+    const C = RD.CLASSES[h.cls];
+    const live = G.phase === 'raid' && h.tile != null;
+    return [
+      ['Health', live ? `${Math.max(0, Math.ceil(h.hp))} / ${Math.round(h.maxHp)}` : String(Math.round(h.maxHp))],
+      ['Damage', `${Math.round(h.dmg)} every ${h.rate}s (${Math.round(h.dmg / h.rate)} a second)`],
+      ['Reach', h.range > 1.5 ? `${h.range} tiles (ranged)` : 'melee'],
+      ['Speed', `${(h.speed || C.speed).toFixed(2)} tiles a second`],
+      ['Sight', `${h.vision || C.vision} tiles`],
+      ['Runs at', h.fleeAt > 0 ? `${pct(h.fleeAt)} health` : 'never'],
+      ['Bravery', pct(Math.min(1, h.brave != null ? h.brave : C.brave))],
+      ['Greed', pct(Math.min(1, h.greed != null ? h.greed : C.greed))],
+    ];
+  }
+  function heroState(h) {
+    if (G.phase !== 'raid' || !G.R || h.id == null) return '';
+    const st = { seek: 'heading for the hoard', loot: 'looting', escape: 'leaving with gold', flee: 'running for the gate', dead: 'dead', out: 'escaped' }[h.state] || 'waiting at the gate';
+    const fx = [];
+    if (h.stun > 0) fx.push('stunned'); if (h.rootT > 0) fx.push('pinned'); if (h.slowT > 0) fx.push('slowed');
+    if (h.cageT > 0) fx.push('caged'); if (h.confuse > 0) fx.push('dazed'); if (h.poison) fx.push('poisoned');
+    if (h.fearT > 0) fx.push('afraid'); if (h.soulTorn) fx.push('soul torn');
+    const knows = h.K ? h.K.traps.size : 0;
+    return `<p class="note">Right now: <b>${st}</b>${h.tile != null && RD.heroAlive(h) && G.floors > 1 ? ` on floor ${RD.ROMAN[RD.fl(h.tile)]}` : ''}${fx.length ? ` · ${fx.join(', ')}` : ''}${h.carry ? ` · carrying ${h.carry} gold` : ''} · knows ${knows} trap${knows === 1 ? '' : 's'}</p>`;
+  }
+  function showHero(h, back) {
+    const C = RD.CLASSES[h.cls];
+    const prey = h.hunt != null && G.items.get(h.hunt);
+    const tr = (h.traits || []).map((t) => `<li><span class="ti">${RD.TRAITS[t].icon}</span><b>${esc(RD.TRAITS[t].name)}</b> ${esc(RD.TRAITS[t].desc)}</li>`).join('');
+    openModal(`
+      <p class="eyebrow">${C.unique ? 'Legend' : 'Adventurer'} · ${RD.TIERS[h.tier]}-rank ${esc(C.name)}</p>
+      <div class="herohead"><span></span><h2 id="sheet-title">${esc(h.name)}${h.title ? ` <em>${esc(h.title)}</em>` : ''}</h2></div>
+      <p class="lede">${esc(C.desc)}</p>
+      <div class="chips">${h.nemesis ? `<span class="chip wanted">Nemesis · escaped ${h.escapes}×, triple bounty</span>` : ''}${h.lvl > 1 ? `<span class="chip vet">Veteran ×${h.lvl - 1}: +${(h.lvl - 1) * 10}% strength</span>` : ''}${prey ? `<span class="chip hunt">Strike team: hunting your ${esc(RD.ITEMS[prey.type].name)}</span>` : ''}</div>
+      ${heroState(h)}
+      <div class="cols">
+        <div><h3>Stats</h3><table class="st">${heroStats(h).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></div>
+        <div><h3>Abilities</h3><ul class="abil">${abilities(h.cls, h).map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>
+      </div>
+      ${tr ? `<h3>Traits</h3><ul class="traits">${tr}</ul>` : ''}
+      <div class="seedrow"><button type="button" class="go" id="hero-close" data-focus>${back ? 'Back' : 'Close'}</button></div>`, (sh) => {
+      const cv = el('canvas');
+      RD.heroIcon(cv, h, 48);
+      sh.querySelector('.herohead span').replaceWith(cv);
+      sh.querySelector('#hero-close').onclick = () => (back ? back() : closeModal());
+    });
+  }
+
+  // ---------------------------------------------------------------- pieces up close
+  const kindOf = (d) => d.boss ? (d.lord ? 'Demon Lord' : d.myth ? 'Myth boss' : 'Boss') : d.den ? 'Horde' : d.summonOnly ? 'Summoned monster' : { trap: d.hidden ? 'Hidden trap' : 'Trap', turret: 'Wall piece', monster: d.elite ? 'Elite monster' : 'Monster', door: 'Obstacle', totem: 'Room', seal: 'Boss seal' }[d.kind];
+  const SENSE = { mech: 'a mechanism', magic: 'magic', illusion: 'an illusion' };
+  const classesWith = (f) => Object.values(RD.CLASSES).filter(f).map((C) => C.name);
+  // the rules a piece plays by, in words
+  function pieceNotes(type) {
+    const d = RD.ITEMS[type], out = [];
+    if (d.hidden) out.push(`Hidden until a hero spots it. It is ${SENSE[d.sense]}, so it is spotted by: ${classesWith((C) => C.detect && C.detect[d.sense]).join(', ')}.`);
+    else if (d.sense) out.push(`Disguised. Seen through by: ${classesWith((C) => C.detect && C.detect[d.sense]).join(', ')}.`);
+    if (d.kind === 'trap') out.push(['chasm', 'abyss'].includes(type) ? 'Cannot be disarmed; heroes who know it walk a long way around.' : `Rogues and other disarmers (${classesWith((C) => C.disarm).join(', ')}) can switch it off once they know it is there.`);
+    if (d.oneShot) out.push('Fires once a raid.');
+    if (d.kind === 'turret') out.push(`Shoots heroes in line${d.chain ? ' and arcs lightning between them' : ''}. A hero it has hit who can disarm may jam it for 12s.${type === 'pylon' ? ` Needs line of sight; pylons must stand ${RD.GAP.pylon} tiles apart.` : RD.GAP[type] ? ` Must stand ${RD.GAP[type]} tiles from another ${d.name.toLowerCase()}.` : ''}`);
+    if (d.kind === 'door') out.push(d.nopick ? 'Cannot be picked; it has to be battered down.' : 'Knights batter it, rogues pick the lock.');
+    if (d.elite) out.push('Elite: outfights a whole party of its own rank.');
+    if (d.boss) out.push(`Boss: one per floor and it never leaves its lair.${d.myth ? ' A myth: it comes late and hits like it.' : ''} Strike teams of specialists hunt known bosses.`);
+    if (d.undead) out.push(`Undead: ${classesWith((C) => C.holy).join(', ')} deal extra damage to it.`);
+    if (d.tags && d.tags.includes('beast')) out.push('A beast: Beast Tamers can calm it for a while.');
+    if (d.tags && d.tags.includes('goblinoid')) out.push('A goblinoid: the Goblin Slayer deals triple damage to it.');
+    if (d.boss) out.push(`Slayers (${classesWith((C) => C.slayer).join(', ')}) deal extra damage to bosses.`);
+    if (d.drain) out.push(`Heals ${pct(d.drain)} of the damage it deals.`);
+    if (d.slows) out.push('Its hits slow heroes.');
+    if (d.lure) out.push('Looks like a treasure chest; greedy heroes walk right up to it.');
+    if (d.kind === 'monster' && !d.den && !d.boss) out.push(`Guards ${d.leash} tiles around its post, and runs down heroes who flee or carry gold.`);
+    if (d.kind === 'seal') out.push('While this floor’s boss lives, heroes here cannot take the stairs or leave by the gate. Anyone still sealed in when the night ends dies. Only the Phantom Thief walks through.');
+    if (d.aura) out.push(d.aura === 'monster' ? 'Monsters within range: +25% damage, +15% health.' : 'Traps within range: +20% damage, rearm 40% faster.');
+    const themes = Object.values(RD.THEMES).filter((t) => t.tag && d.tags && d.tags.includes(t.tag)).map((t) => t.name);
+    if (themes.length) out.push(`Stronger on ${themes.join(', ')} floors.`);
+    return out;
+  }
+  // what the floor it stands on adds to a placed piece
+  function floorBonus(it) {
+    const d = RD.ITEMS[it.type], out = [];
+    const th = RD.themeOf(G, it.tile);
+    const m = (k) => RD.themeMult(G, it.type, it.tile, k);
+    const parts = [['hp', 'health'], ['dmg', 'damage'], ['speed', 'speed']].filter(([k]) => m(k) !== 1).map(([k, n]) => `${m(k) > 1 ? '+' : ''}${Math.round((m(k) - 1) * 100)}% ${n}`);
+    if (parts.length) out.push(`${th.name}: ${parts.join(', ')}`);
+    if (d.kind === 'monster' && RD.inAura(G, it.tile, 'monster')) out.push('War Banner nearby: +25% damage, +15% health');
+    if ((d.kind === 'trap' || d.kind === 'turret') && RD.inAura(G, it.tile, 'trap')) out.push('Trapmaster’s Sigil nearby: +20% damage, rearms 40% faster');
+    return out;
+  }
+  function levelTable(type, tier) {
+    const rows = [1, 2, 3, 4, 5].map((lv) => RD.pieceStats(type, lv, tier));
+    const keys = rows[0].map((r) => r[0]).filter((k, i) => rows.some((r) => r[i] && r[i][1] !== rows[0][i][1]));
+    if (!keys.length) return '';
+    return `<table class="st lvls"><tr><th></th>${[1, 2, 3, 4, 5].map((l) => `<th>Lv${l}</th>`).join('')}</tr>${keys.map((k) => `<tr><th>${esc(k)}</th>${rows.map((r) => `<td>${esc((r.find((x) => x[0] === k) || [])[1])}</td>`).join('')}</tr>`).join('')}</table>`;
+  }
+  // o: { lv, tier, it (a placed piece), m (a live monster), back }
+  function showPiece(type, o) {
+    o = o || {};
+    const d = RD.ITEMS[type];
+    const it = o.it || (o.m && o.m.item) || null;
+    const lv = o.lv || (o.m && o.m.lv) || (it && it.lv) || 1;
+    const tier = o.tier != null ? o.tier : o.m ? o.m.tier : d.tier;
+    const me = () => showPiece(type, o);
+    const mn = RD.minionOf(type, tier);
+    const live = o.m && !o.m.dead ? `<p class="note">Right now: <b>${Math.max(0, Math.ceil(o.m.hp))} / ${Math.round(o.m.maxHp)}</b> health${o.m.summoner ? ` · called by the ${esc(o.m.summoner.d.name)}` : ''}${o.m.calmT > 0 ? ' · calmed' : ''}${o.m.dormant ? ' · waiting' : ''}</p>` : '';
+    const bonus = it && it.tile != null && G.items.get(it.tile) === it ? floorBonus(it) : [];
+    let minion = '';
+    if (mn) {
+      const u = RD.ITEMS[mn.type];
+      minion = `<h3>${mn.kind === 'summon' ? 'Summons' : 'The horde'}</h3>
+        <p class="note">${mn.kind === 'summon' ? `Calls a ${esc(u.name)} every ${mn.every}s, up to ${mn.max} at once.` : `Releases ${mn.count} × ${esc(u.name)} when the raid begins (one more on a Fungal floor).`} Each fights at <b>${RD.TIERS[mn.tier]} rank, Lv${lv}</b>${mn.tier > u.tier ? `, ${mn.tier - u.tier} rank${mn.tier - u.tier > 1 ? 's' : ''} above an ordinary ${esc(u.name.toLowerCase())}` : ''}. Summons are not weak copies.</p>
+        <div class="minion"><span class="gi" data-icon="item:${mn.type}"></span>${rowsTable(RD.pieceStats(mn.type, lv, mn.tier))}</div>
+        <button type="button" class="ghost small" id="open-minion">Everything about the ${esc(u.name)} at ${RD.TIERS[mn.tier]} rank</button>`;
+    }
+    const st = RD.pieceStats(type, lv, tier);
+    openModal(`
+      <p class="eyebrow">${esc(kindOf(d))}${d.tags && d.tags.length ? ' · ' + d.tags.join(', ') : ''}</p>
+      <div class="herohead"><span class="gi" data-icon="item:${type}"></span><h2 id="sheet-title">${tierTag(tier)} ${esc(d.name)} <em>Lv${lv}</em></h2></div>
+      <p class="lede">${esc(d.desc)}</p>
+      ${live}
+      <div class="cols">
+        <div><h3>At Lv${lv}${tier !== d.tier ? `, ${RD.TIERS[tier]} rank` : ''}</h3><table class="st">${st.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}<tr><th>Costs</th><td>${d.summonOnly ? 'summoned only' : RD.costOf(G, type) + ' malice'}</td></tr>${it && G.phase === 'build' && G.items.get(it.tile) === it ? `<tr><th>Sells for</th><td>${RD.refund(it)} malice</td></tr>` : ''}</table>
+          ${bonus.length ? `<p class="note">On this floor: ${bonus.map(esc).join(' · ')}</p>` : ''}</div>
+        <div><h3>How it works</h3><ul class="abil">${pieceNotes(type).map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>
+      </div>
+      ${levelTable(type, tier) ? `<h3>By level</h3>${levelTable(type, tier)}` : ''}
+      ${minion}
+      <div class="seedrow"><button type="button" class="go" id="piece-close" data-focus>${o.back ? 'Back' : 'Close'}</button></div>`, (sh) => {
+      icons(sh);
+      const om = sh.querySelector('#open-minion');
+      if (om) om.onclick = () => showPiece(mn.type, { lv, tier: mn.tier, back: me });
+      sh.querySelector('#piece-close').onclick = () => (o.back ? o.back() : closeModal());
+    });
+  }
+  const rowsTable = (rows) => `<table class="st">${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table>`;
+  // fill every <span class="gi" data-icon="kind:key"> with its drawing
+  function icons(root) {
+    for (const sp of root.querySelectorAll('.gi')) {
+      const [kind, k] = (sp.dataset.icon || '').split(':');
+      if (!kind) { sp.remove(); continue; }
+      const cv = el('canvas');
+      if (kind === 'hero') RD.heroIcon(cv, { cls: k, tier: RD.CLASSES[k].minTier || 0, title: RD.CLASSES[k].unique ? 'x' : '' }, 36);
+      else RD.drawIcon(cv, kind === 'power' && k === 'seal' ? 'power:seal' : k, 36);
+      sp.replaceWith(cv);
+    }
+  }
+  // a typical hero of a class at its first rank, for the guide
+  function sampleHero(cls) {
+    const C = RD.CLASSES[cls], tier = C.minTier || 0, sc = RD.TIER_MULT[tier] * RD.DIFF[G.diff].hero;
+    return { cls, tier, lvl: 1, traits: [], name: C.name, title: C.unique ? RD.TITLES[cls] : '', maxHp: Math.round(C.hp * sc), dmg: C.dmg * sc, rate: C.rate, range: C.range, speed: C.speed, vision: C.vision, fleeAt: C.fleeAt, brave: C.brave, greed: C.greed };
+  }
+
+  // ---------------------------------------------------------------- the guide
+  // Everything in the game, locked or not: pieces with their numbers, powers, heroes, traits, floors and omens.
+  const GUIDE_TABS = [['basics', 'Basics'], ['powers', 'Powers'], ...RD.GROUPS.map((g) => [g.id, g.name]), ['summons', 'Summons & hordes'], ['heroes', 'Heroes'], ['traits', 'Traits'], ['floors', 'Floor types'], ['omens', 'Omens & twists']];
+  function guideBody(tab) {
+    const entry = (icon, title, sub, body, open) => `<li class="gentry${open ? ' open' : ''}"${open ? ` data-open="${open}" tabindex="0" role="button"` : ''}><span class="gi" data-icon="${icon || ''}"></span><div><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}${body}${open ? '<span class="more">Full details ›</span>' : ''}</div></li>`;
+    if (tab === 'basics') {
+      const ranks = RD.TIERS.map((t, i) => `<span class="tier" style="--tc:${RD.TIER_COLOR[i]}">${t}</span> night ${RD.realNight(G, RD.TIER_UNLOCK[i])}`).join(' · ');
+      return `<div class="gtext">
+        <p><b>You are the dungeon.</b> Each night you build, then heroes raid. They want your gold. Kill them and you earn <b class="m">malice</b>, the currency you build with. If the hoard reaches zero, the dungeon falls.</p>
+        <p><b>The guild learns.</b> Anyone who escapes, or dies carrying a Sending Stone, reports what they saw. Press <kbd>G</kbd> for the Guild’s map. Known traps get avoided or disarmed, so move them. What nobody survives to report stays secret.</p>
+        <p><b>Ranks.</b> Everything has a rank from F to SSS (and EX for the Demon Lord), each about 1.5× the one below. In this run they open on: ${ranks}.</p>
+        <p><b>Levels.</b> The Level tool raises a placed piece up to Lv${RD.MAX_LEVEL}: +15% damage and health, longer holds and faster rearming per level.</p>
+        <p><b>Kinds of piece.</b> Traps fire when stepped on (hidden ones until spotted). Wall pieces shoot down corridors. Monsters guard a post and chase runners. Hordes release a pack. Rooms boost what stands near them. One boss per floor; a Boss Seal locks heroes on that floor until the boss dies.</p>
+        <p><b>Powers.</b> During a raid, spend malice on the bar at the bottom. Aimed powers: click the power, then a tile (on touch, tap twice).</p>
+        <p><b>Heroes.</b> Click any hero in the Ledger or the dispatch card for their stats, abilities and traits.</p></div>`;
+    }
+    if (tab === 'powers') return `<ul class="gentries">${Object.entries(RD.POWERS).map(([k, p]) => entry('power:' + k, esc(p.name), `${RD.powerOpen(G, k) ? 'Open' : 'Opens night ' + RD.realNight(G, p.night)} · <span class="m">${RD.powerCost(G, k)}</span> malice · recovers in ${p.cd}s${p.target ? ' · aimed' : ''}`, `<p>${esc(p.desc)}</p>`)).join('')}</ul>`;
+    const g = RD.GROUPS.find((x) => x.id === tab);
+    if (g) {
+      const top = RD.unlocked(G);
+      const keys = Object.keys(RD.ITEMS).filter((k) => RD.inGroup(g, k)).sort((a, b) => RD.ITEMS[a].tier - RD.ITEMS[b].tier || RD.ITEMS[a].cost - RD.ITEMS[b].cost);
+      return `<ul class="gentries">${keys.map((k) => {
+        const d = RD.ITEMS[k];
+        const tags = d.tags && d.tags.length ? ` · ${d.tags.join(', ')}` : '';
+        return entry('item:' + k, `${tierTag(d.tier)} ${esc(d.name)}`, `${d.tier <= top ? 'Open' : 'Opens night ' + RD.realNight(G, RD.TIER_UNLOCK[d.tier])} · <span class="m">${RD.costOf(G, k)}</span> malice${tags}`, `<p>${esc(d.desc)}</p>${statTable(k, 1, false)}`, `item:${k}`);
+      }).join('')}</ul>`;
+    }
+    if (tab === 'summons') {
+      const parents = Object.keys(RD.ITEMS).filter((k) => RD.minionOf(k)).sort((a, b) => RD.ITEMS[a].tier - RD.ITEMS[b].tier);
+      return `<p class="note">Bosses call help during a raid and hordes release a pack. They fight at their parent’s level, and summons at one rank below their boss, so a Demon Lord’s imps are SSS-rank. These are their numbers at Lv1 next to the piece that brings them.</p><ul class="gentries">${parents.map((k) => {
+        const d = RD.ITEMS[k], mn = RD.minionOf(k), u = RD.ITEMS[mn.type];
+        const how = mn.kind === 'summon' ? `called by the ${d.name} every ${mn.every}s, up to ${mn.max}` : `${mn.count} released by the ${d.name}`;
+        return entry('item:' + mn.type, `${tierTag(mn.tier)} ${esc(u.name)}`, `${how} · fights at ${RD.TIERS[mn.tier]} rank`, `<p>${esc(u.desc)}</p>${rowsTable(RD.pieceStats(mn.type, 1, mn.tier))}`, `item:${mn.type}:${mn.tier}`);
+      }).join('')}</ul>`;
+    }
+    if (tab === 'heroes') {
+      const ks = Object.keys(RD.CLASSES).sort((a, b) => !!RD.CLASSES[a].unique - !!RD.CLASSES[b].unique || (RD.CLASSES[a].minTier || 0) - (RD.CLASSES[b].minTier || 0));
+      return `<ul class="gentries">${ks.map((k) => {
+        const C = RD.CLASSES[k];
+        return entry('hero:' + k, `${esc(C.name)}${C.unique ? ' <em>legend</em>' : ''}`, `From ${RD.TIERS[C.minTier || 0]} rank · ${C.hp} health, ${C.dmg} damage every ${C.rate}s at F rank · ${C.range > 1.5 ? 'ranged' : 'melee'} · runs at ${pct(C.fleeAt)}`, `<p>${esc(C.desc.replace(/^Unique\.\s*/, ''))}</p><ul class="abil">${abilities(k).map((a) => `<li>${esc(a)}</li>`).join('')}</ul>`, `hero:${k}`);
+      }).join('')}</ul>`;
+    }
+    if (tab === 'traits') return `<ul class="gentries">${Object.values(RD.TRAITS).map((t) => entry('', `<span class="ti">${t.icon}</span> ${esc(t.name)}`, '', `<p>${esc(t.desc)}</p>`)).join('')}</ul>`;
+    if (tab === 'floors') return `<ul class="gentries">${Object.values(RD.THEMES).map((t) => entry('', esc(t.name), t.tag ? `Boosts ${t.tag} pieces: ${RD.TAGS[t.tag].map((k) => RD.ITEMS[k] ? RD.ITEMS[k].name : k).join(', ')}` : '', `<p>${esc(t.desc)}</p>`)).join('')}</ul><p class="note">Floors II–V open on nights ${[1, 2, 3, 4].map((f) => RD.floorNight(G, f)).join(', ')}. In endless and Saga runs you can keep digging: floor VI on night ${RD.floorNight(G, 5)}, VII on ${RD.floorNight(G, 6)}, and so on down to X.</p>`;
+    if (tab === 'omens') return `<h3>Omens · one each night</h3><ul class="gentries">${RD.OMENS.map((o) => entry('', esc(o.name), '', `<p>${esc(o.text)}</p>`)).join('')}</ul><h3>Twists · chosen at the start, +15% score each</h3><ul class="gentries">${Object.values(RD.TWISTS).map((t) => entry('', esc(t.name), '', `<p>${esc(t.desc)}</p>`)).join('')}</ul>`;
+    return '';
+  }
+  function showGuide(tab, back) {
+    tab = tab || ui.guideTab || 'basics';
+    ui.guideTab = tab;
+    openModal(`
+      <p class="eyebrow">Guide</p>
+      <h2 id="sheet-title">${esc(GUIDE_TABS.find((t) => t[0] === tab)[1])}</h2>
+      <div class="seg tabs guide-tabs" role="tablist">${GUIDE_TABS.map(([k, n]) => `<button type="button" role="tab" data-k="${k}" class="${k === tab ? 'on' : ''}" aria-selected="${k === tab}">${esc(n)}</button>`).join('')}</div>
+      <div class="guide-body">${guideBody(tab)}</div>
+      <div class="seedrow"><button type="button" class="go" id="guide-close" data-focus>${back ? 'Back' : 'Close'}</button></div>`, (sh) => {
+      for (const b of sh.querySelectorAll('.guide-tabs button')) b.onclick = () => showGuide(b.dataset.k, back);
+      icons(sh);
+      const again = () => showGuide(tab, back);
+      for (const li of sh.querySelectorAll('.gentry[data-open]')) {
+        const [kind, k, t] = li.dataset.open.split(':');
+        const go = () => (kind === 'hero' ? showHero(sampleHero(k), again) : showPiece(k, { tier: t != null ? +t : undefined, back: again }));
+        li.onclick = go;
+        li.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+      }
+      const on = sh.querySelector('.guide-tabs .on');
+      if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' });
+      sh.querySelector('#guide-close').onclick = () => (back ? back() : closeModal());
+    });
   }
 
   // ---------------------------------------------------------------- modals
   function openModal(html, onReady) {
+    P.gameplayStop();
     $('sheet').innerHTML = html;
     $('modal').hidden = false;
+    $('modal').scrollTop = 0;
     if (onReady) onReady($('sheet'));
     const f = $('sheet').querySelector('[data-focus]');
     if (f) f.focus();
   }
-  function closeModal() { $('modal').hidden = true; }
+  function closeModal() { $('modal').hidden = true; if (G) P.gameplayStart(); }
   const isOpen = () => !$('modal').hidden;
 
   function showIntro() {
-    const best = store.get('best', null);
+    const m = meta();
     const seed = (Math.random() * 1e6) | 0;
     const live = G && G.phase === 'build' && hasSave() ? G : null;
-    const diffs = Object.entries(RD.DIFF).map(([k, d]) => `<label class="diff${ui.diff === k ? ' on' : ''}"><input type="radio" name="diff" value="${k}"${ui.diff === k ? ' checked' : ''}><b>${esc(d.name)}</b><span>${esc(d.blurb)} Hold ${d.win} nights.</span></label>`).join('');
+    const day = today();
+    const dailyBest = m.daily[day];
+    const dTw = dailyTwists(day);
+    const radios = (name, entries, cur) => entries.map(([k, d, locked]) => `<label class="diff${cur === k ? ' on' : ''}${locked ? ' off' : ''}"><input type="radio" name="${name}" value="${k}"${cur === k ? ' checked' : ''}${locked ? ' disabled' : ''}><b>${esc(d.name)}</b><span>${esc(d.blurb || d.desc)}</span></label>`).join('');
+    const modes = radios('mode', Object.entries(RD.MODES).filter(([k]) => k !== 'daily'), ui.mode);
+    const diffs = radios('diff', Object.entries(RD.DIFF).map(([k, d]) => [k, { name: d.name, blurb: `${d.blurb} Hold ${d.win} nights.` }]), ui.diff);
+    const pacts = radios('pact', [['', { name: 'No pact', desc: 'Start as you are.' }]].concat(Object.entries(RD.PACTS).map(([k, p]) => [k, { name: p.name, desc: m.trophies[p.trophy] ? p.desc : `Locked. Earn “${RD.TROPHIES[p.trophy].name}”: ${RD.TROPHIES[p.trophy].desc}` }, !m.trophies[p.trophy]])), ui.pact || '');
+    const twists = Object.entries(RD.TWISTS).map(([k, t]) => `<label class="diff${ui.twists.includes(k) ? ' on' : ''}"><input type="checkbox" name="twist" value="${k}"${ui.twists.includes(k) ? ' checked' : ''}><b>${esc(t.name)}</b><span>${esc(t.desc)}</span></label>`).join('');
+    const summary = () => `${RD.MODES[ui.mode].name} · ${RD.DIFF[ui.diff].name} · hold ${RD.MODES[ui.mode].win || RD.DIFF[ui.diff].win} nights${ui.pact ? ' · ' + RD.PACTS[ui.pact].name : ''}${ui.twists.length ? ` · ${ui.twists.length} twist${ui.twists.length > 1 ? 's' : ''} (+${15 * ui.twists.length}% score)` : ''}`;
+    const got = Object.keys(m.trophies).length;
+    const chal = ui.challenge;
     openModal(`
-      ${live ? `<div class="resume">
-        <div><b>Your dungeon awaits</b><span>${esc(RD.DIFF[live.diff].name)} · night ${live.raid}${live.endless ? ' (endless)' : ` of ${RD.winAt(live)}`} · ${live.floors} floor${live.floors > 1 ? 's' : ''} · ${live.gold} gold · ${live.malice} malice · rated ${RD.rating(live.guild.threat)}</span></div>
-        <button type="button" class="go" id="resume" data-focus>Resume</button>
+      ${chal ? `<div class="resume challenge">
+        <div><b>A friend challenged you</b><span>${esc(RD.MODES[chal.mode].name)} · ${esc(RD.DIFF[chal.diff].name)} · seed ${chal.seed}${chal.twists.length ? ' · ' + chal.twists.map((k) => esc(RD.TWISTS[k].name)).join(', ') : ''}${chal.score ? ` · beat ${chal.score}` : ''}</span></div>
+        <button type="button" class="go" id="accept" data-focus>Accept</button>
       </div>` : ''}
-      <p class="eyebrow">Strategy · Dungeon builder</p>
+      ${live ? `<div class="resume">
+        <div><b>Your dungeon awaits</b><span>${esc(RD.modeOf(live).name)} · ${esc(RD.DIFF[live.diff].name)} · night ${live.raid}${live.endless ? ' (endless)' : ` of ${RD.winAt(live)}`} · ${live.gold} gold · rated ${RD.rating(live.guild.threat)}</span></div>
+        <button type="button" class="go" id="resume" ${chal ? '' : 'data-focus'}>Resume</button>
+      </div>` : ''}
       <h2 id="sheet-title">The Reverse Dungeon</h2>
-      <p class="lede">You play the dungeon, not the hero. Adventurers come for your gold every night. The ones who get out alive tell the guild what they saw, and the next party walks in knowing it.</p>
-      <div class="cols">
-        <div>
-          <h3>Between raids</h3>
-          <ul class="rules">
-            <li><span>Build traps, monsters and bosses. Everything has a rank from F to SSS. Higher ranks and deeper floors unlock as you survive.</span></li>
-            <li><span>The guild rates your dungeon by what survivors saw. Show them an S-rank monster and S-rank heroes come for it.</span></li>
-          </ul>
+      <p class="lede">You are the dungeon. Build traps and monsters, then watch heroes try to steal your gold. Survivors tell the guild what they saw, so kill them before they get out.</p>
+      <form id="seedform">
+        <div class="playrow">
+          <button type="submit" class="${live || chal ? 'ghost' : 'go big'}" ${live || chal ? '' : 'data-focus'}>${live ? 'New dungeon' : 'Play'}</button>
+          <button type="button" class="ghost daily-btn" id="daily" title="${esc(dTw.map((k) => RD.TWISTS[k].name + ': ' + RD.TWISTS[k].desc).join('  '))}">Daily: ${esc(dTw.map((k) => RD.TWISTS[k].name).join(' + '))}${dailyBest ? ` · best ${dailyBest}` : ''}</button>
+          <button type="button" class="ghost" id="heart-btn">Dungeon Heart · ${m.souls} souls</button>
+          <button type="button" class="ghost" id="guide-intro">Guide</button>
+          <button type="button" class="ghost" id="trophies">Trophies ${got}/${Object.keys(RD.TROPHIES).length}</button>
         </div>
-        <div>
-          <h3>During a raid</h3>
-          <ul class="rules">
-            <li><span>Heroes who escape share their map. Kill them before they reach the gate and your secrets stay secret.</span></li>
-            <li><span>Rare legends join some parties. Raise a Demon Lord and the guild sends its Chosen Hero.</span></li>
-          </ul>
-        </div>
-      </div>
-      <h3>Difficulty</h3>
-      <div class="diffs" role="radiogroup">${diffs}</div>
-      ${best ? `<p class="record">Your best: held ${best.held} raid${best.held === 1 ? '' : 's'}, ${best.slain} heroes slain.</p>` : ''}
-      <form class="seedrow" id="seedform">
-        <label for="seed">Seed</label>
-        <input id="seed" name="seed" inputmode="numeric" value="${seed}" autocomplete="off">
-        <button type="button" class="ghost" id="reroll">New seed</button>
-        <button type="submit" class="${live ? 'ghost' : 'go'}" ${live ? '' : 'data-focus'}>${live ? 'Start a new dungeon' : 'Wake the dungeon'}</button>
+        <p class="note" id="summary">${esc(summary())}${live ? ' · replaces your saved dungeon' : ''}</p>
+        ${m.streak > 1 ? `<p class="note streak">Day ${m.streak} in a row${m.gift === day ? '' : ` · your first dungeon today brings ${Math.min(20, 2 * m.streak)} souls`}</p>` : ''}
+        <details class="more">
+          <summary>Mode, difficulty, pact, twists and seed</summary>
+          <h3>Mode</h3><div class="diffs" role="radiogroup">${modes}</div>
+          <h3>Difficulty</h3><div class="diffs" role="radiogroup">${diffs}</div>
+          <h3>Dark pact</h3><div class="diffs" role="radiogroup">${pacts}</div>
+          <h3>Twists · each adds 15% to your score</h3><div class="diffs">${twists}</div>
+          <div class="seedrow">
+            <label for="seed">Seed</label>
+            <input id="seed" name="seed" inputmode="numeric" value="${seed}" autocomplete="off">
+            <button type="button" class="ghost" id="reroll">New seed</button>
+          </div>
+        </details>
       </form>
-      ${live ? '<p class="note">Starting a new dungeon replaces your saved one. Difficulty applies to new dungeons.</p>' : ''}`, (s) => {
+      ${m.runs ? `<p class="record">${m.runs} dungeon${m.runs === 1 ? '' : 's'} so far, ${m.slain} heroes slain.${m.best[`${ui.mode}:${ui.diff}`] ? ` Best ${esc(RD.MODES[ui.mode].name)} · ${esc(RD.DIFF[ui.diff].name)} score: ${m.best[`${ui.mode}:${ui.diff}`]}.` : ''}</p>` : ''}
+      ${ui.canSave ? '' : '<p class="note warn">This browser window is blocking storage, so progress will not be saved.</p>'}`, (s) => {
       const r = s.querySelector('#resume');
       if (r) r.onclick = () => closeModal();
-      for (const inp of s.querySelectorAll('input[name=diff]')) inp.onchange = () => {
-        ui.diff = inp.value;
-        store.set('diff', ui.diff);
+      const refresh = () => {
         for (const l of s.querySelectorAll('.diff')) l.classList.toggle('on', l.querySelector('input').checked);
+        s.querySelector('#summary').textContent = summary() + (live ? ' · replaces your saved dungeon' : '');
+      };
+      const savePrefs = () => store.set('prefs', { mode: ui.mode, diff: ui.diff, pact: ui.pact, twists: ui.twists });
+      for (const inp of s.querySelectorAll('input[type=radio], input[type=checkbox]')) inp.onchange = () => {
+        if (inp.name === 'mode') ui.mode = inp.value;
+        if (inp.name === 'diff') ui.diff = inp.value;
+        if (inp.name === 'pact') ui.pact = inp.value || null;
+        if (inp.name === 'twist') ui.twists = [...s.querySelectorAll('input[name=twist]:checked')].map((x) => x.value);
+        savePrefs();
+        refresh();
       };
       s.querySelector('#reroll').onclick = () => { s.querySelector('#seed').value = (Math.random() * 1e6) | 0; };
+      s.querySelector('#trophies').onclick = () => showTrophies();
+      s.querySelector('#heart-btn').onclick = () => showHeart();
+      s.querySelector('#guide-intro').onclick = () => showGuide(null, showIntro);
+      s.querySelector('#daily').onclick = () => begin(seedOf('rd-daily-' + day), 'daily', 'normal', dTw);
+      const acc = s.querySelector('#accept');
+      if (acc) acc.onclick = () => { ui.challenge = null; begin(chal.seed, chal.mode, chal.diff, chal.twists); };
       s.querySelector('#seedform').onsubmit = (e) => {
         e.preventDefault();
         const v = parseInt(s.querySelector('#seed').value, 10);
-        newGame(Number.isFinite(v) ? v : (Math.random() * 1e6) | 0, null, ui.diff);
-        save();
-        closeModal();
-        announce();
+        begin(Number.isFinite(v) ? v : (Math.random() * 1e6) | 0, ui.mode, ui.diff, ui.twists.slice());
       };
     });
   }
 
-  const heroLi = (h, cls, extra) => `<li class="${cls}${h.title ? ' legend' : ''}">${tierTag(h.tier)} ${esc(h.name)}${h.title ? ` <em>${esc(h.title)}</em>` : ''} · ${RD.CLASSES[h.cls].name}${extra || ''}</li>`;
+  function begin(seedV, mode, diff, tw) {
+    newGame(seedV, null, diff, mode, ui.pact, tw);
+    if (mode === 'daily') G.daily = today();
+    const gift = claimGift();
+    save();
+    closeModal();
+    if (store.get('tut', null) !== 'done') tutorial('start');
+    else announce();
+    if (gift) setTimeout(() => toast(`Day ${meta().streak} streak: +${gift} souls for the Dungeon Heart.`, true), 3300);
+  }
+
+  // permanent upgrades bought with souls
+  function showHeart() {
+    const m = meta();
+    const rows = Object.entries(RD.HEART).map(([k, h]) => {
+      const lv = m.heart[k] || 0;
+      const cost = h.costs[lv];
+      return `<li><div><b>${esc(h.name)}</b> <span class="lv">${'●'.repeat(lv)}${'○'.repeat(h.costs.length - lv)}</span><span>${esc(h.desc)}</span></div>
+        ${cost == null ? '<em>Full</em>' : `<button type="button" class="ghost small" data-k="${k}"${m.souls < cost ? ' disabled' : ''}>${cost} souls</button>`}</li>`;
+    }).join('');
+    openModal(`
+      <p class="eyebrow">Permanent · bought with souls</p>
+      <h2 id="sheet-title">The Dungeon Heart</h2>
+      <p class="lede">Every dungeon you run feeds the Heart. You have <b class="soulcount">${m.souls}</b> souls. Earn more from your score, from nemeses, and from playing on consecutive days. Upgrades apply to new dungeons.</p>
+      <ul class="heart">${rows}</ul>
+      <div class="seedrow"><button type="button" class="go" id="back" data-focus>Back</button></div>`, (s) => {
+      for (const b of s.querySelectorAll('[data-k]')) b.onclick = () => {
+        const mm = meta(), k = b.dataset.k, lv = mm.heart[k] || 0, cost = RD.HEART[k].costs[lv];
+        if (cost == null || mm.souls < cost) return;
+        mm.souls -= cost;
+        mm.heart[k] = lv + 1;
+        store.set('meta', mm);
+        sfx('level');
+        showHeart();
+      };
+      s.querySelector('#back').onclick = () => showIntro();
+    });
+  }
+
+  // a link that starts a friend on this exact dungeon: same seed, mode, difficulty and twists
+  function shareChallenge(score) {
+    const url = P.inviteLink({ seed: G.seed, mode: G.mode, diff: G.diff, twists: (G.twists || []).join('.'), score: score || 0 });
+    const done = () => toast('Challenge link copied. Send it to a friend.', true);
+    const fallback = () => { window.prompt('Copy this link and send it to a friend:', url); };
+    try { navigator.clipboard.writeText(url).then(done, fallback); } catch (e) { fallback(); }
+  }
+  function readChallenge() {
+    const seed = parseInt(P.inviteParam('seed'), 10);
+    if (!Number.isFinite(seed)) return null;
+    const mode = RD.MODES[P.inviteParam('mode')] ? P.inviteParam('mode') : 'quick';
+    const diff = RD.DIFF[P.inviteParam('diff')] ? P.inviteParam('diff') : 'normal';
+    const twists = (P.inviteParam('twists') || '').split('.').filter((k) => RD.TWISTS[k]);
+    return { seed, mode: mode === 'daily' ? 'quick' : mode, diff, twists, score: parseInt(P.inviteParam('score'), 10) || 0 };
+  }
+
+  function showTrophies() {
+    const m = meta();
+    const list = Object.entries(RD.TROPHIES).map(([k, t]) => {
+      const pact = Object.values(RD.PACTS).find((p) => p.trophy === k);
+      return `<li class="${m.trophies[k] ? 'got' : ''}"><b>${esc(t.name)}</b><span>${esc(t.desc)}${pact ? ` Unlocks the <em>${esc(pact.name)}</em> pact.` : ''}</span>${m.trophies[k] ? `<small>${esc(m.trophies[k])}</small>` : ''}</li>`;
+    }).join('');
+    openModal(`
+      <p class="eyebrow">Kept across every dungeon</p>
+      <h2 id="sheet-title">Trophies</h2>
+      <ul class="trophies">${list}</ul>
+      <div class="seedrow"><button type="button" class="go" id="back" data-focus>Back</button></div>`, (s) => {
+      s.querySelector('#back').onclick = () => showIntro();
+    });
+  }
+
+  const heroLi = (h, cls, extra) => `<li class="${cls}${h.title ? ' legend' : ''}">${tierTag(h.tier)} ${h.nemesis ? '<span class="chip wanted">Nemesis</span> ' : ''}${esc(h.name)}${h.title ? ` <em>${esc(h.title)}</em>` : ''} · ${RD.CLASSES[h.cls].name}${extra || ''}</li>`;
 
   function showDebrief() {
     const d = G.debrief;
@@ -480,11 +1200,28 @@
     else lede = `${d.escaped.length} got out and reported to the guild. Expect them to plan around what they saw.`;
     if (over && G.result === 'lost') { eyebrow = 'The dungeon falls'; title = 'The hoard is empty'; lede = `The guild carried off the last of your gold on raid ${d.raid}. You slew ${G.stats.slain} heroes${G.stats.legends ? `, ${G.stats.legends} of them legends,` : ''} before the end.`; }
     if (over && G.result === 'won') { eyebrow = 'The guild gives up'; title = 'The dungeon endures'; lede = `You held your hoard through ${RD.winAt(G)} raids with ${G.gold} gold left and ${G.stats.slain} heroes slain. The guild has struck your dungeon from its maps.`; }
+    const perfect = !over && d.killed.length >= 2 && !d.escaped.length;
+    if (perfect) eyebrow = 'Perfect night';
+    if (d.raid === 1 && !over) lede += d.escaped.length
+      ? ' Anyone who escapes adds what they saw to the Guild’s map (press G or the Guild’s map button to see it), and the next party plans around it.'
+      : ' Nobody got out, so the guild still knows nothing about your dungeon. Keep it that way.';
+    if (perfect || (over && G.result === 'won') || d.killed.some((h) => h.title)) P.happytime();
+    sfx(over ? (G.result === 'won' ? 'win' : 'lose') : 'dawn');
+    const revive = over && canRevive();
+    let scoreLine = '';
+    if (over || G.result === 'won') {
+      const rec = revive ? { score: RD.score(G) } : G.runRecord || (G.runRecord = recordRun());
+      scoreLine = `<p class="score">Score <b>${rec.score}</b>${rec.isBest ? ' · new best' : rec.best ? ` · best ${rec.best}` : ''}${rec.souls ? ` · +${rec.souls} souls` : ''}${G.mode === 'daily' ? ` · daily dungeon ${esc(G.daily || '')}` : ''}</p>`;
+    }
     const a = RD.assess(G);
+    const grade = RD.nightGrade(d);
+    const gc = RD.TIER_COLOR[RD.TIERS.indexOf(grade)] || 'var(--ash)';
     openModal(`
+      <div class="stamp" style="--sc:${gc}" aria-label="Night grade ${grade}">${grade}<small>Night grade</small></div>
       <p class="eyebrow">${eyebrow}</p>
       <h2 id="sheet-title">${title}</h2>
       <p class="lede">${lede}</p>
+      ${scoreLine}
       <dl class="tally">
         <div><dt>Slain</dt><dd style="color:var(--malice-hi)">${d.killed.length}</dd></div>
         <div><dt>Escaped</dt><dd style="color:var(--steel)">${d.escaped.length}</dd></div>
@@ -494,21 +1231,177 @@
       </dl>
       <div class="cols">
         <div><h3>Slain</h3><ul class="names">${names(d.killed, 'k')}</ul></div>
-        <div><h3>Escaped</h3><ul class="names">${names(d.escaped, 'e', (h) => (h.carry ? ` · ${h.carry} gold` : ''))}</ul></div>
+        <div><h3>Escaped</h3><ul class="names">${names(d.escaped, 'e', (h) => (h.carry ? ` · ${h.carry} gold` : '') + (h.growth ? ` · <span class="growth">${esc(h.growth)}</span>` : ''))}</ul></div>
       </div>
       ${rum ? `<h3>What the guild heard</h3><ul class="rumors">${rum}</ul>` : ''}
       <div class="seedrow">
-        ${over ? `<button type="button" class="go" id="again" data-focus>Wake a new dungeon</button>${G.result === 'won' ? '<button type="button" class="ghost" id="endless">Keep going (endless)</button>' : ''}` : `<button type="button" class="go" id="next" data-focus>Prepare the next night</button>`}
+        ${revive ? '<button type="button" class="go plain pair" id="again" data-focus>Accept defeat</button><button type="button" class="go rewarded pair" id="revive">🎬 Second chance: refill the hoard</button>' : over ? `<button type="button" class="go" id="again" data-focus>Wake a new dungeon</button>${G.result === 'won' ? '<button type="button" class="ghost" id="endless">Keep going (endless)</button>' : ''}` : `<button type="button" class="go" id="next" data-focus>Prepare the next night</button>`}
         <button type="button" class="ghost" id="log-btn">Full raid log</button>
+        <button type="button" class="ghost" id="share-card">Share report</button>
+        ${over ? '<button type="button" class="ghost" id="challenge">Challenge a friend</button>' : ''}
       </div>`, (s) => {
+      const ch = s.querySelector('#challenge');
+      if (ch) ch.onclick = () => shareChallenge(RD.score(G));
+      s.querySelector('#share-card').onclick = () => shareReport(d, grade);
+      setTimeout(() => sfx('crush'), 420);
+      countUp(s);
+      const go = (ad) => {
+        const next = () => { RD.nextNight(G); save(); RD.FX.floaters.length = RD.FX.parts.length = RD.FX.bubbles.length = 0; closeModal(); renderAll(); announce(); };
+        // a natural break between nights, never in the first few minutes
+        if (ad && G.raid >= 3) P.midgame(next);
+        else next();
+      };
       const n = s.querySelector('#next');
-      if (n) n.onclick = () => { RD.nextNight(G); save(); RD.FX.floaters.length = RD.FX.parts.length = 0; closeModal(); renderAll(); announce(); };
+      if (n) n.onclick = () => go(true);
+      const rv = s.querySelector('#revive');
+      if (rv) rv.onclick = () => P.rewarded((ok) => {
+        if (!ok) return toast('No ad was available. You can still accept defeat.');
+        G.stats.revived = true;
+        G.gold = Math.max(40, Math.round(RD.DIFF[G.diff].gold * 0.6));
+        G.result = null;
+        G.phase = 'debrief';
+        go(false);
+        toast(`The hoard is refilled with ${G.gold} gold. This only happens once per dungeon.`, true);
+      });
       const ag = s.querySelector('#again');
-      if (ag) ag.onclick = () => showIntro();
+      if (ag) ag.onclick = () => { if (G.phase === 'over') { saveRecord(); store.del('save'); if (!G.runRecord) G.runRecord = recordRun(); } showIntro(); };
       const en = s.querySelector('#endless');
-      if (en) en.onclick = () => { G.endless = true; G.phase = 'debrief'; RD.nextNight(G); save(); closeModal(); renderAll(); announce(); };
+      if (en) en.onclick = () => { G.endless = true; G.runRecord = null; G.phase = 'debrief'; RD.nextNight(G); save(); closeModal(); renderAll(); announce(); };
       s.querySelector('#log-btn').onclick = () => showReports(0, true);
     });
+  }
+
+  // A picture of the night to post anywhere: grade, tally, the fallen, and a link to the same dungeon.
+  function reportCard(d, grade) {
+    const W = 1200, H = 630, cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const c = cv.getContext('2d');
+    const P2 = RD.PAL;
+    c.fillStyle = P2.void; c.fillRect(0, 0, W, H);
+    const g = c.createRadialGradient(W * 0.75, H * 0.2, 40, W * 0.75, H * 0.2, 700);
+    g.addColorStop(0, 'rgba(196,60,104,0.28)'); g.addColorStop(1, 'rgba(196,60,104,0)');
+    c.fillStyle = g; c.fillRect(0, 0, W, H);
+    c.strokeStyle = P2.malice; c.lineWidth = 6; c.strokeRect(18, 18, W - 36, H - 36);
+    c.strokeStyle = 'rgba(87,73,95,0.8)'; c.lineWidth = 2; c.strokeRect(30, 30, W - 60, H - 60);
+    c.textBaseline = 'alphabetic';
+    c.fillStyle = P2.gold; c.font = "64px 'Jacquard 24', Georgia, serif";
+    c.fillText('The Reverse Dungeon', 64, 118);
+    c.fillStyle = P2.ash; c.font = "26px 'DM Mono', monospace";
+    const sub = `Night ${d.raid} · ${RD.modeOf(G).name} · ${RD.DIFF[G.diff].name} · seed ${G.seed}`;
+    c.fillText(sub, 66, 160);
+    // the stamp
+    const gc = RD.TIER_COLOR[RD.TIERS.indexOf(grade)] || P2.ash;
+    c.save(); c.translate(W - 190, 150); c.rotate(-0.25);
+    c.strokeStyle = gc; c.lineWidth = 8; c.beginPath(); c.arc(0, 0, 92, 0, Math.PI * 2); c.stroke();
+    c.lineWidth = 3; c.beginPath(); c.arc(0, 0, 78, 0, Math.PI * 2); c.stroke();
+    c.fillStyle = gc; c.font = "120px 'Jacquard 24', Georgia, serif"; c.textAlign = 'center'; c.fillText(grade, 0, 40);
+    c.restore();
+    // the tally
+    const stats = [['Slain', d.killed.length, P2.maliceHi], ['Escaped', d.escaped.length, P2.steel], ['Gold lost', d.goldLost, P2.gold], ['Hoard', G.gold, P2.gold]];
+    stats.forEach(([k, v, col], i) => {
+      const x = 66 + i * 230;
+      c.fillStyle = P2.ash; c.font = "22px 'DM Mono', monospace"; c.textAlign = 'left'; c.fillText(k.toUpperCase(), x, 250);
+      c.fillStyle = col; c.font = "700 64px 'Alegreya Sans', sans-serif"; c.fillText(String(v), x, 316);
+    });
+    // the fallen
+    c.fillStyle = P2.bone; c.font = "700 28px 'Alegreya Sans', sans-serif";
+    c.fillText(d.killed.length ? 'The fallen' : 'Nobody fell tonight', 66, 384);
+    const icon = document.createElement('canvas');
+    d.killed.slice(0, 6).forEach((h, i) => {
+      const x = 66 + (i % 2) * 520, y = 410 + Math.floor(i / 2) * 58;
+      RD.heroIcon(icon, h, 44);
+      c.drawImage(icon, x, y, 44, 44);
+      c.fillStyle = RD.TIER_COLOR[h.tier]; c.font = "22px 'DM Mono', monospace"; c.fillText(RD.TIERS[h.tier], x + 56, y + 30);
+      c.fillStyle = h.title ? P2.gold : P2.bone; c.font = "26px 'Alegreya Sans', sans-serif";
+      const name = `${h.name}${h.title ? ' ' + h.title : ''} · ${RD.CLASSES[h.cls].name}`;
+      c.fillText(name.length > 34 ? name.slice(0, 33) + '…' : name, x + 96, y + 31);
+    });
+    if (d.killed.length > 6) { c.fillStyle = P2.ash; c.font = "22px 'Alegreya Sans', sans-serif"; c.fillText(`and ${d.killed.length - 6} more`, 66, 594); }
+    c.fillStyle = P2.maliceHi; c.font = "24px 'Alegreya Sans', sans-serif"; c.textAlign = 'right';
+    c.fillText('Can your dungeon do better?', W - 64, H - 50);
+    return cv;
+  }
+  function shareReport(d, grade) {
+    const cv = reportCard(d, grade);
+    const link = P.inviteLink({ seed: G.seed, mode: G.mode, diff: G.diff, twists: (G.twists || []).join('.'), score: 0 });
+    const text = `Night ${d.raid} in The Reverse Dungeon: grade ${grade}, ${d.killed.length} slain, ${d.escaped.length} escaped. Try the same dungeon:`;
+    cv.toBlob(async (blob) => {
+      if (!blob) return toast('Could not draw the report.');
+      const file = new File([blob], `reverse-dungeon-night-${d.raid}.png`, { type: 'image/png' });
+      try {
+        if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text, url: link }); return; }
+      } catch (e) { if (e && e.name === 'AbortError') return; }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = file.name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      try { await navigator.clipboard.writeText(`${text} ${link}`); toast('Report saved as an image. The caption and link are on your clipboard.', true); }
+      catch (e) { toast('Report saved as an image.', true); }
+    }, 'image/png');
+  }
+
+  // dawn report numbers tick up instead of appearing
+  function countUp(root) {
+    for (const dd of root.querySelectorAll('.tally dd')) {
+      const to = parseInt(dd.textContent, 10);
+      if (!Number.isFinite(to) || to <= 0) continue;
+      const t0 = performance.now();
+      const tick = (now) => {
+        const f = Math.min(1, (now - t0) / 700);
+        dd.textContent = Math.round(to * (1 - (1 - f) ** 3));
+        if (f < 1) requestAnimationFrame(tick);
+      };
+      dd.textContent = '0';
+      requestAnimationFrame(tick);
+    }
+  }
+
+  // ---------------------------------------------------------------- the guided first night
+  // Four short steps: place a trap on the heroes' path, place a monster by the hoard, open the gate, watch.
+  function routeTiles() {
+    const { prev } = RD.dijkstra(G, G.entrance, (j) => (G.tiles[j] ? 1 : Infinity));
+    const p = [];
+    for (let s = G.hoard; s >= 0 && s !== G.entrance; s = prev[s]) p.push(s);
+    return p.reverse();
+  }
+  function coach(html, marks) {
+    $('coach').hidden = !html;
+    $('coach-text').innerHTML = html || '';
+    RD.view.marks = marks || [];
+    $('go').classList.toggle('pulse', ui.tut === 3);
+  }
+  function endTutorial() {
+    ui.tut = 0;
+    coach(null);
+    store.set('tut', 'done');
+  }
+  function tutorial(ev, d) {
+    if (ev === 'start') {
+      ui.tut = 1;
+      selectTool('spikes');
+      const r = routeTiles();
+      const spot = r.slice(Math.floor(r.length * 0.3)).find((t) => !RD.check(G, 'spikes', t));
+      coach('You are the dungeon. Heroes come in at the bright <b>gate</b> to steal your <b>gold</b>. Click the glowing tile to put a Spike Pit in their way.', [G.entrance, G.hoard, spot].filter((t) => t != null));
+      return;
+    }
+    if (!ui.tut) return;
+    if (ev === 'placed' && ui.tut === 1 && d.kind === 'trap') {
+      ui.tut = 2;
+      selectTool('skeleton');
+      const r = routeTiles();
+      const spot = r.slice().reverse().slice(1, 6).find((t) => !RD.check(G, 'skeleton', t));
+      coach('Now a <b>Skeleton</b> to guard the gold. Click the glowing tile.', [spot, G.hoard].filter((t) => t != null));
+    } else if (ev === 'placed' && ui.tut === 2 && d.kind === 'monster') {
+      ui.tut = 3;
+      coach('Ready. Press <b>Open the gate</b>. Kill them all and the guild learns nothing.', []);
+    } else if (ev === 'raid') {
+      ui.tut = 4;
+      coach('Watch the raid. Survivors carry a report back to the guild. You can also speed it up below.', []);
+      setTimeout(() => { if (ui.tut === 4) endTutorial(); }, 9000);
+    }
   }
 
   // The last five raids, kept in the save so they survive a refresh.
@@ -517,7 +1410,7 @@
     if (!H.length) return;
     i = Math.max(0, Math.min(H.length - 1, i));
     const r = H[i];
-    const names = (list, cls) => list.length ? list.map((h) => heroLi(h, cls, h.carry ? ` · ${h.carry} gold` : '')).join('') : '<li class="empty">None</li>';
+    const names = (list, cls) => list.length ? list.map((h) => heroLi(h, cls, (h.carry ? ` · ${h.carry} gold` : '') + (h.growth ? ` · <span class="growth">${esc(h.growth)}</span>` : ''))).join('') : '<li class="empty">None</li>';
     openModal(`
       <p class="eyebrow">Raid reports</p>
       <h2 id="sheet-title">Night ${r.raid}</h2>
@@ -554,31 +1447,65 @@
   }
 
   // ---------------------------------------------------------------- setup
-  function newGame(seed, loaded, diff) {
-    G = loaded || RD.newGame(seed, diff);
+  function newGame(seed, loaded, diff, mode, pact, twists) {
+    G = loaded || RD.newGame(seed, diff, mode, pact, { twists: twists || [], heart: meta().heart });
     ui.tool = 'spikes';
     ui.carry = null;
     ui.power = null;
     ui.hoverIt = null;
+    ui.armed = -1;
+    if (ui.tut) { ui.tut = 0; coach(null); }
+    hideDispatch();
     setSpeed(1);
     RD.view.floor = 0;
     RD.fxFloor(0);
     RD.view.dirty = true;
-    RD.FX.floaters.length = RD.FX.parts.length = 0;
+    RD.FX.floaters.length = RD.FX.parts.length = RD.FX.bubbles.length = 0;
     fit();
     renderAll();
   }
 
+  // the map fills whatever room the board area has, times the zoom
+  const ZOOMS = [1, 1.5, 2, 2.75];
   function fit() {
     const wrap = $('board-wrap');
-    const w = wrap.clientWidth - 18;
-    const h = Math.max(300, window.innerHeight - 290);
-    RD.resize(w, h);
+    const z = ZOOMS[ui.zoom || 0];
+    RD.resize(Math.max(200, wrap.clientWidth - 10) * z, Math.max(140, wrap.clientHeight - 10) * z);
+    wrap.classList.toggle('zoomed', z > 1);
+    $('zoom-out').disabled = !ui.zoom;
+    $('zoom-in').disabled = ui.zoom >= ZOOMS.length - 1;
+  }
+  // zoom in or out, keeping the same point of the map under the middle of the board
+  function setZoom(z, fx, fy) {
+    z = Math.max(0, Math.min(ZOOMS.length - 1, z));
+    if (z === (ui.zoom || 0)) return;
+    const sc = $('board-scroll');
+    const cx = fx != null ? fx : (sc.scrollLeft + sc.clientWidth / 2) / Math.max(1, sc.scrollWidth);
+    const cy = fy != null ? fy : (sc.scrollTop + sc.clientHeight / 2) / Math.max(1, sc.scrollHeight);
+    ui.zoom = z;
+    fit();
+    sc.scrollLeft = cx * sc.scrollWidth - sc.clientWidth / 2;
+    sc.scrollTop = cy * sc.scrollHeight - sc.clientHeight / 2;
+  }
+  // while zoomed during a raid, keep the leading hero on screen
+  function cameraFollow() {
+    if (!ui.zoom || !G.R || !ui.follow) return;
+    const live = G.R.heroes.filter((h) => RD.heroAlive(h) && RD.fl(h.tile) === RD.view.floor);
+    if (!live.length) return;
+    const lead = live.reduce((a, h) => (RD.tdist(h.tile, G.entrance) > RD.tdist(a.tile, G.entrance) ? h : a), live[0]);
+    const sc = $('board-scroll'), T = RD.view.T, M = RD.view.M;
+    const k = sc.scrollWidth / RD.view.w;
+    const px = (M + lead.x * T) * k, py = (M + lead.y * T) * k;
+    const pad = 60;
+    if (px < sc.scrollLeft + pad || px > sc.scrollLeft + sc.clientWidth - pad || py < sc.scrollTop + pad || py > sc.scrollTop + sc.clientHeight - pad) {
+      sc.scrollTo({ left: px - sc.clientWidth / 2, top: py - sc.clientHeight / 2, behavior: 'smooth' });
+    }
   }
 
   function bind() {
     $('menu').onclick = () => { if (G.phase !== 'raid') showIntro(); else toast('Wait for dawn before leaving the dungeon.'); };
     $('reports').onclick = () => showReports(0);
+    $('guide-btn').onclick = () => showGuide();
     const cv = $('board');
     RD.initRender(cv);
     cv.addEventListener('pointermove', (e) => {
@@ -591,9 +1518,81 @@
       if (ui.hoverIt) { ui.hoverIt = null; renderDetail(); }
       if (G && G.phase === 'build') $('hint').textContent = 'Pick a blueprint, then click the map.';
     });
-    cv.addEventListener('click', (e) => { const i = canvasTile(e); RD.view.hover = i; click(i); });
+    cv.addEventListener('pointerdown', (e) => { ui.touch = e.pointerType !== 'mouse'; });
+    // touch: the first tap shows what would happen (details, range, outline), the second tap does it
+    cv.addEventListener('click', (e) => {
+      const i = canvasTile(e);
+      const aiming = G.phase === 'build' || (G.phase === 'raid' && !!ui.power);
+      if (ui.touch && aiming && i >= 0 && ui.armed !== i) {
+        ui.armed = i;
+        RD.view.hover = i;
+        ui.hoverIt = null;
+        preview(i);
+        if (G.phase === 'raid') toast(`Tap again to use ${RD.POWERS[ui.power].name} here.`, true);
+        return;
+      }
+      ui.armed = -1;
+      RD.view.hover = i;
+      if (!$('dispatch').hidden) hideDispatch();
+      click(i);
+    });
     cv.addEventListener('contextmenu', (e) => { e.preventDefault(); ui.carry = null; ui.power = null; renderDetail(); });
     $('go').onclick = startRaid;
+    $('zoom-in').onclick = () => setZoom((ui.zoom || 0) + 1);
+    $('zoom-out').onclick = () => setZoom((ui.zoom || 0) - 1);
+
+    // two-finger pinch on touch screens
+    const pts = new Map();
+    let pinch = 0;
+    const span = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+    cv.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') { pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pts.size === 2) pinch = span(); } });
+    cv.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size !== 2 || !pinch) return;
+      const r = span() / pinch;
+      if (r > 1.25 || r < 0.8) {
+        const [a, b] = [...pts.values()], box = cv.getBoundingClientRect();
+        setZoom((ui.zoom || 0) + (r > 1 ? 1 : -1), ((a.x + b.x) / 2 - box.left) / box.width, ((a.y + b.y) / 2 - box.top) / box.height);
+        pinch = span();
+        ui.armed = -1;
+      }
+    });
+    const lift = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = 0; };
+    cv.addEventListener('pointerup', lift);
+    cv.addEventListener('pointercancel', lift);
+    $('cancel').onclick = () => { ui.carry = null; ui.armed = -1; renderDetail(); };
+    const drawer = (open) => { $('ledger').classList.toggle('open', open); $('ledger-btn').setAttribute('aria-expanded', open); };
+    $('ledger-btn').onclick = () => drawer(!$('ledger').classList.contains('open'));
+    $('ledger-close').onclick = () => drawer(false);
+    $('coach-skip').onclick = endTutorial;
+    $('dispatch-close').onclick = hideDispatch;
+    const soundBtn = $('sound-btn');
+    const setSound = (v, keep) => { RD.audio.setOn(v); soundBtn.setAttribute('aria-pressed', v); if (keep) store.set('sound', v); };
+    soundBtn.onclick = () => setSound(!RD.audio.isOn(), true);
+    setSound(store.get('sound', true) && !P.muted(), false);
+    P.onMute = (m) => setSound(!m && store.get('sound', true), false);
+    // browsers only allow sound after a gesture
+    const unlock = () => RD.audio.unlock();
+    document.addEventListener('pointerdown', unlock, { passive: true });
+    document.addEventListener('keydown', unlock);
+    document.addEventListener('click', (e) => { if (e.target.closest('.card, .tool, .floor, .seg button, .icon-btn')) sfx('click'); });
+    // freeze everything while an ad plays or the tab is hidden
+    P.onPause = () => { ui.adPause = true; RD.audio.duck(true); };
+    P.onResume = () => { ui.adPause = false; RD.audio.duck(false); lastT = performance.now(); };
+    document.addEventListener('visibilitychange', () => { RD.audio.duck(document.hidden || ui.adPause); lastT = performance.now(); });
+    // keep keys and the wheel from scrolling a portal's page
+    window.addEventListener('keydown', (e) => { if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && e.target.tagName !== 'INPUT') e.preventDefault(); });
+    // the wheel never scrolls the portal page: ctrl+wheel (and trackpad pinch) zooms around the pointer,
+    // a plain wheel pans the map when zoomed in
+    cv.addEventListener('wheel', (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        const r = cv.getBoundingClientRect();
+        setZoom((ui.zoom || 0) + (e.deltaY < 0 ? 1 : -1), (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+      } else if (!ui.zoom) e.preventDefault();
+    }, { passive: false });
+    if (window.ResizeObserver) new ResizeObserver(() => { if (G) fit(); }).observe($('board-wrap'));
     $('view-truth').onclick = () => setView(false);
     $('view-guild').onclick = () => setView(true);
     for (const b of document.querySelectorAll('.speed button')) b.onclick = () => setSpeed(+b.dataset.speed);
@@ -607,7 +1606,7 @@
       } else if (e.key === 'g' || e.key === 'G') setView(!RD.view.guildMap);
       else if (e.key === '[') setFloor(RD.view.floor - 1, true);
       else if (e.key === ']') setFloor(RD.view.floor + 1, true);
-      else if (e.key === 'Escape') { ui.carry = null; ui.power = null; renderDetail(); if (G.phase === 'raid') renderPowers(); }
+      else if (e.key === 'Escape') { ui.carry = null; ui.power = null; ui.armed = -1; renderDetail(); if (G.phase === 'raid') renderPowers(); }
       else if (G.phase === 'raid' && '124'.includes(e.key)) setSpeed(+e.key);
     });
     $('modal').addEventListener('keydown', (e) => { if (e.key === 'Escape' && G && G.phase !== 'over' && G.phase !== 'debrief') closeModal(); });
@@ -625,17 +1624,30 @@
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000);
     lastT = now;
-    if (G) {
-      if (G.phase === 'raid' && ui.speed > 0 && !isOpen()) {
-        let t = dt * ui.speed;
+    // browsers stop animation frames in hidden tabs on their own; ads need an explicit freeze
+    if (G && !ui.adPause) {
+      if (G.phase === 'raid' && ui.speed > 0 && !isOpen() && ui.stopT > 0) ui.stopT -= dt; // hit-stop: hold the frame
+      else if (G.phase === 'raid' && ui.speed > 0 && !isOpen()) {
+        const slow = ui.slowT > 0 ? 0.25 : 1;
+        if (ui.slowT > 0) ui.slowT -= dt;
+        let t = dt * ui.speed * slow;
         while (t > 1e-6 && G.phase === 'raid') { const s = Math.min(t, 1 / 60); RD.step(G, s); t -= s; }
-        RD.fxUpdate(dt * ui.speed);
-      } else RD.fxUpdate(dt);
-      RD.draw(G, ui, dt);
+        RD.fxUpdate(dt * ui.speed * slow);
+      } else if (ui.slowT > 0) { ui.slowT -= dt; RD.fxUpdate(dt * 0.25); } // the last kill plays out after the raid has ended
+      else RD.fxUpdate(dt);
+      // between raids, with nothing moving, ten frames a second is plenty and saves phones' batteries
+      const fx = RD.FX, busy = G.phase === 'raid' || fx.floaters.length || fx.parts.length || fx.rings.length || fx.shots.length || RD.view.dirty || RD.view.hover !== ui.drawnHover;
+      ui.idle = busy ? 0 : ui.idle + dt;
+      if (busy || ui.idle === 0 || (now - (ui.drawnAt || 0)) > 100) {
+        RD.draw(G, ui, dt);
+        ui.drawnAt = now;
+        ui.drawnHover = RD.view.hover;
+      } else RD.view.time += dt;
       slowT += dt;
       if (slowT > 0.2 && G.phase === 'raid') {
         slowT = 0;
         follow();
+        cameraFollow();
         renderStats();
         renderParty();
         renderLog();
@@ -646,15 +1658,34 @@
     requestAnimationFrame(frame);
   }
 
-  function boot() {
+  async function boot() {
+    P.loadingStart();
+    await P.init();
+    probeStorage();
     bind();
+    const prefs = store.get('prefs', null);
+    ui.diff = (prefs && prefs.diff) || store.get('diff', null) || (store.get('best', null) ? 'normal' : 'easy');
+    ui.mode = (prefs && RD.MODES[prefs.mode] && prefs.mode !== 'daily' && prefs.mode) || 'campaign';
+    ui.pact = (prefs && prefs.pact && RD.PACTS[prefs.pact] && has(RD.PACTS[prefs.pact].trophy) && prefs.pact) || null;
+    ui.twists = ((prefs && prefs.twists) || []).filter((k) => RD.TWISTS[k]);
+    ui.challenge = readChallenge();
+    touchStreak();
     let loaded = null;
     try { loaded = RD.loadGame(store.get('save', null)); } catch (e) { loaded = null; }
     if (!loaded) store.del('save');
     else if (loaded.diff) ui.diff = loaded.diff;
-    newGame((Math.random() * 1e6) | 0, loaded, ui.diff);
-    showIntro();
+    // someone who has never played goes straight into the guided first night; the menu is one button away
+    const fresh = !loaded && !meta().runs && store.get('tut', null) !== 'done' && !ui.challenge;
+    if (fresh) begin((Math.random() * 1e6) | 0, ui.mode, ui.diff, []);
+    else {
+      newGame((Math.random() * 1e6) | 0, loaded, ui.diff);
+      showIntro();
+    }
     requestAnimationFrame(frame);
+    // the cached map layer draws text, so redraw it once the bundled fonts are in
+    const done = () => { RD.view.dirty = true; fit(); P.loadingStop(); };
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(done, done);
+    else done();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

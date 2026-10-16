@@ -275,9 +275,16 @@
   // How dangerous each tile looks to the guild: turret lanes and monster posts, weighted by rank.
   RD.hazard = function (K) {
     const hz = new Float32Array(NN);
+    let open = null; // what the guild believes is passable, built once for line-of-sight checks
     for (const [t, type] of K.turrets) {
       const [x0, y0] = xy(t), f = fl(t);
       const d = RD.ITEMS[type];
+      if (d.chain) {
+        // chain lightning reaches every open tile it can see within range
+        if (!open) open = K.tiles.map((v) => (v === 0 ? 0 : 1));
+        for (let j = f * N; j < (f + 1) * N; j++) if (K.tiles[j] !== 0 && RD.tdist(t, j) <= d.range + 0.5 && RD.los(open, t, j)) hz[j] += 1.5 + 0.6 * d.tier;
+        continue;
+      }
       for (const [dx, dy] of DIRS) {
         for (let s = 1; s <= d.range; s++) {
           const x = x0 + dx * s, y = y0 + dy * s;
@@ -312,39 +319,60 @@
   };
 
   // ---------------------------------------------------------------- unlocks
+  // How far along the dungeon is, in campaign nights. Quick and daily runs age faster.
+  RD.modeOf = (G) => RD.MODES[G.mode] || RD.MODES.campaign;
+  RD.age = (G) => 1 + (G.raid - 1) * RD.modeOf(G).pace;
+  // the real night on which a campaign-night milestone arrives in this run
+  RD.realNight = (G, campaignNight) => Math.ceil(1 + (campaignNight - 1) / RD.modeOf(G).pace - 1e-9);
   RD.unlocked = (G) => {
     let t = 0;
-    while (t < RD.MAX_TIER && G.raid >= RD.TIER_UNLOCK[t + 1]) t++;
+    while (t < RD.MAX_TIER && RD.age(G) >= RD.TIER_UNLOCK[t + 1]) t++;
     return t;
   };
   RD.nextUnlock = (G) => {
     const t = RD.unlocked(G) + 1;
     if (t > RD.MAX_TIER) return null;
-    return { tier: t, night: RD.TIER_UNLOCK[t], items: Object.keys(RD.ITEMS).filter((k) => RD.ITEMS[k].tier === t && !RD.ITEMS[k].summonOnly) };
+    return { tier: t, night: RD.realNight(G, RD.TIER_UNLOCK[t]), items: Object.keys(RD.ITEMS).filter((k) => RD.ITEMS[k].tier === t && !RD.ITEMS[k].summonOnly) };
   };
-  RD.winAt = (G) => RD.DIFF[G.diff].win;
+  // the real night floor f can be dug; floors past the fifth come every DEEP_EVERY nights, at least 20 nights apart
+  RD.floorNight = (G, f) => f < RD.BASE_FLOORS ? RD.realNight(G, RD.FLOOR_UNLOCK[f]) : Math.max(RD.DEEP_EVERY * (f - RD.BASE_FLOORS + 1), RD.floorNight(G, f - 1) + 20);
+  RD.deepAllowed = (G) => !!(G.endless || RD.modeOf(G).deep);
+  RD.maxFloors = (G) => (RD.deepAllowed(G) ? RD.MAX_FLOORS : RD.BASE_FLOORS);
+  RD.winAt = (G) => RD.modeOf(G).win || RD.DIFF[G.diff].win;
 
   // ---------------------------------------------------------------- the guild's rating of your dungeon
   // The guild only rates what it has seen. A strong piece nobody escaped from is a secret.
+  // Three things push the rating: the strongest thing they have seen (plus a little for every other
+  // piece close to it in rank), how strong adventurers are in general by now, and how many of their own died here.
   RD.assess = function (G) {
-    const K = G.guild.K;
+    const gu = G.guild, K = gu.K, D = RD.DIFF[G.diff];
+    const vals = [];
+    for (const [t, type] of K.lairs) { const d = RD.ITEMS[type]; vals.push({ v: d.tier + (d.boss ? 1 : d.elite ? 0.6 : 0.2), type, tile: t }); }
+    for (const t of K.mimics) vals.push({ v: RD.ITEMS.mimic.tier + 0.6, type: 'mimic', tile: t });
+    for (const [t, v] of K.traps) vals.push({ v: RD.ITEMS[v.type].tier - 0.3, type: v.type, tile: t });
+    for (const [t, type] of K.turrets) vals.push({ v: RD.ITEMS[type].tier, type, tile: t });
+    vals.sort((x, y) => y.v - x.v);
     let seen = 0, why = null;
-    const consider = (v, type, tile) => { if (v > seen) { seen = v; why = { type, tile }; } };
-    for (const [t, type] of K.lairs) { const d = RD.ITEMS[type]; consider(d.tier + (d.boss ? 1 : d.elite ? 0.6 : 0.2), type, t); }
-    for (const t of K.mimics) consider(RD.ITEMS.mimic.tier + 0.6, 'mimic', t);
-    for (const [t, v] of K.traps) consider(RD.ITEMS[v.type].tier - 0.3, v.type, t);
-    for (const [t, type] of K.turrets) consider(RD.ITEMS[type].tier, type, t);
-    const D = RD.DIFF[G.diff];
-    const base = 0.27 * (G.raid - 1) * D.drift;
-    // the guild never sends more than about one rank above what the dungeon could have built
-    const cap = RD.unlocked(G) + 0.45;
-    const threat = Math.max(0, Math.min(cap, Math.max(base, seen) + G.guild.pressure));
-    return { threat, seen, base, why };
+    if (vals.length) {
+      const close = vals.filter((x) => x.v >= vals[0].v - 1).length - 1;
+      seen = vals[0].v + 0.15 * Math.min(3, close);
+      why = vals[0];
+    }
+    const top = RD.unlocked(G);
+    // adventurers in general keep pace with what dungeons can build, whether or not anyone came back
+    const base = Math.max(0.27 * (RD.age(G) - 1) * D.drift, top - 0.6 + (D.drift - 1) * 0.5);
+    // at most one rank above what you could have built, and only when the guild is angry or has seen it
+    const cap = top + 0.3 + (RD.age(G) > 6 ? 0.6 * Math.min(1, 0.8 * gu.pressure + 0.4 * Math.max(0, seen - top)) : 0);
+    const threat = Math.max(0, Math.min(cap, Math.max(base, seen) + gu.pressure));
+    return { threat, seen, base, why, cap };
   };
   RD.rating = (threat) => RD.TIERS[Math.max(0, Math.min(RD.MAX_TIER, Math.round(threat)))];
 
   // ---------------------------------------------------------------- game state
-  RD.newGame = function (seed, diff) {
+  RD.newGame = function (seed, diff, mode, pact, opts) {
+    opts = opts || {};
+    mode = RD.MODES[mode] ? mode : 'campaign';
+    if (RD.MODES[mode].diff) diff = RD.MODES[mode].diff;
     diff = RD.DIFF[diff] ? diff : 'normal';
     const D = RD.DIFF[diff];
     const rng = RD.makeRng(seed);
@@ -352,22 +380,26 @@
     const tiles = new Uint8Array(NN);
     tiles.set(map.tiles, 0);
     const G = {
-      seed, rng, diff,
-      floors: 1, tiles, gates: [map.entrance], stairs: [], links: new Map(),
+      seed, rng, diff, mode, pact: pact || null, twists: (opts.twists || []).filter((k) => RD.TWISTS[k]), heart: opts.heart || {},
+      floors: 1, tiles, gates: [map.entrance], stairs: [], links: new Map(), themes: ['halls'],
       entrance: map.entrance, hoard: map.hoard,
       items: new Map(),
       malice: D.malice, gold: D.gold, raid: 1, phase: 'build', endless: false,
       guild: {
         K: RD.newKnow(),
         causes: { trap: 0, illusion: 0, monster: 0, turret: 0 },
-        pressure: 0, threat: 0, wariness: 0,
+        pressure: 0, threat: 0, wariness: 0, blackout: 0, renown: 0,
         veterans: [],
         rumors: [],
       },
       party: [], omen: null, offers: [], sale: null, adapt: '',
-      stats: { slain: 0, escaped: 0, goldLost: 0, held: 0, legends: 0 },
+      stats: { slain: 0, escaped: 0, goldLost: 0, held: 0, legends: 0, nemeses: 0 },
       nextId: 1, history: [], debrief: null, R: null,
     };
+    G.malice += 25 * (G.heart.reserves || 0) + (RD.twisted(G, 'thrones') ? 120 : 0);
+    G.gold += 20 * (G.heart.vault || 0);
+    if (G.pact === 'tithe') G.malice += 60;
+    if (G.pact === 'purse') G.gold += 50;
     RD.G = G;
     RD.beginBuild(G, true);
     return G;
@@ -383,6 +415,26 @@
   }
   RD.isStairs = (G, g) => G.links.has(g);
   RD.isGate = (G, g) => g === G.entrance || (fl(g) > 0 && G.gates[fl(g)] === g % N);
+
+  // ---------------------------------------------------------------- floor themes and room auras
+  RD.themeOf = (G, g) => RD.THEMES[(G.themes && G.themes[fl(g)]) || 'halls'];
+  // the bonus a floor's theme gives a piece standing on it, for one stat
+  RD.themeMult = (G, type, g, stat) => {
+    const th = RD.themeOf(G, g);
+    if (!th || th[stat] == null) return 1;
+    if (stat === 'hold' || stat === 'heroSlow' || stat === 'gold') return th[stat];
+    return th.tag && RD.hasTag(type, th.tag) ? th[stat] : 1;
+  };
+  // is a piece inside the reach of a War Banner or Trapmaster's Sigil?
+  RD.inAura = (G, g, aura) => {
+    for (const it of G.items.values()) { const d = RD.ITEMS[it.type]; if (d.aura === aura && RD.tdist(it.tile, g) <= d.auraR) return true; }
+    return false;
+  };
+  // three themes to choose from for the next floor, seeded by the run
+  RD.themeChoices = (G) => {
+    const rng = RD.makeRng(G.seed * 31 + G.floors * 7 + G.raid);
+    return rng.shuffle(Object.keys(RD.THEMES).filter((k) => k !== 'halls')).slice(0, 3);
+  };
 
   // ---------------------------------------------------------------- save / load
   // Only build-phase state is saved. `pending` marks a save taken at dawn, before the next night was rolled.
@@ -403,15 +455,15 @@
   RD.saveGame = function (G, pending) {
     const g = G.guild, M = G.floors * N;
     return {
-      v: 2, pending: !!pending, diff: G.diff,
+      v: 2, pending: !!pending, diff: G.diff, mode: G.mode, pact: G.pact, adReroll: G.adReroll, twists: G.twists, heart: G.heart, daily: G.daily,
       seed: G.seed, rng: G.rng.state(),
-      floors: G.floors, tiles: Array.from(G.tiles.subarray(0, M)), gates: G.gates, stairs: G.stairs,
+      floors: G.floors, tiles: Array.from(G.tiles.subarray(0, M)), gates: G.gates, stairs: G.stairs, themes: G.themes,
       entrance: G.entrance, hoard: G.hoard,
-      items: [...G.items.values()].map((it) => ({ type: it.type, tile: it.tile, lv: it.lv || 1, paid: it.paid || 0 })),
+      items: [...G.items.values()].map((it) => ({ type: it.type, tile: it.tile, lv: it.lv || 1, paid: it.paid || 0, price: it.price })),
       malice: G.malice, gold: G.gold, raid: G.raid, endless: G.endless,
-      guild: { K: packKnow(g.K, M), causes: g.causes, pressure: g.pressure, threat: g.threat, wariness: g.wariness, veterans: g.veterans, rumors: g.rumors },
+      guild: { K: packKnow(g.K, M), causes: g.causes, pressure: g.pressure, threat: g.threat, wariness: g.wariness, blackout: g.blackout || 0, renown: g.renown || 0, veterans: g.veterans, rumors: g.rumors },
       party: pending ? [] : G.party, omen: G.omen && G.omen.id, offers: G.offers, sale: G.sale, adapt: G.adapt,
-      stats: G.stats, nextId: G.nextId, history: G.history,
+      stats: G.stats, nextId: G.nextId, history: G.history.map((h) => ({ ...h, log: h.log.slice(0, 120) })),
     };
   };
 
@@ -423,21 +475,23 @@
     const items = new Map();
     for (const s of o.items) {
       if (!RD.ITEMS[s.type]) continue;
-      const it = { type: s.type, tile: s.tile, lv: Math.min(RD.MAX_LEVEL, s.lv || s.rank || 1), paid: s.paid || 0 };
+      // saves from before prices were recorded fall back to the list price
+      const it = { type: s.type, tile: s.tile, lv: Math.min(RD.MAX_LEVEL, s.lv || s.rank || 1), paid: s.paid || 0, price: s.price != null ? s.price : RD.ITEMS[s.type].cost };
       freshItem(it);
       items.set(it.tile, it);
     }
     const tiles = new Uint8Array(NN);
     tiles.set(Uint8Array.from(o.tiles), 0);
     const G = {
-      seed: o.seed, rng, diff: RD.DIFF[o.diff] ? o.diff : 'normal',
+      seed: o.seed, rng, diff: RD.DIFF[o.diff] ? o.diff : 'normal', mode: RD.MODES[o.mode] ? o.mode : 'campaign', pact: o.pact || null, adReroll: o.adReroll, twists: o.twists || [], heart: o.heart || {}, daily: o.daily,
       floors: o.floors || 1, tiles, gates: o.gates || [o.entrance], stairs: o.stairs || [], links: new Map(),
+      themes: (o.themes || []).concat(new Array(o.floors || 1).fill('halls')).slice(0, o.floors || 1),
       entrance: o.entrance, hoard: o.hoard,
       items, malice: o.malice, gold: o.gold, raid: o.raid, phase: 'build', endless: o.endless,
-      guild: { pressure: 0, threat: 0, wariness: 0, ...o.guild, K: unpackKnow(o.guild.K) },
+      guild: { pressure: 0, threat: 0, wariness: 0, blackout: 0, renown: 0, ...o.guild, K: unpackKnow(o.guild.K) },
       party: o.party, omen: RD.OMENS.find((m) => m.id === o.omen) || RD.OMENS[0],
       offers: (o.offers || []).filter((t) => RD.ITEMS[t]), sale: o.sale, adapt: o.adapt,
-      stats: { ...o.stats, legends: o.stats.legends || 0 }, nextId: o.nextId, history: o.history || [], debrief: null, R: null,
+      stats: { ...o.stats, legends: o.stats.legends || 0, nemeses: o.stats.nemeses || 0 }, nextId: o.nextId, history: o.history || [], debrief: null, R: null,
     };
     linkFloors(G);
     RD.G = G;
@@ -451,7 +505,8 @@
     it.cd = 0;
     it.spent = false;
     it.off = false;
-    if (d.kind === 'door') { it.hp = RD.scaled(it.type, 'hp', it.lv); it.pick = 0; it.broken = false; }
+    it.jamT = 0;
+    if (d.kind === 'door') { it.hp = RD.scaled(it.type, 'hp', it.lv) * (RD.G && RD.G.pact === 'iron' ? 1.5 : 1); it.pick = 0; it.broken = false; }
   }
 
   RD.beginBuild = function (G, first, keepOmen) {
@@ -461,21 +516,41 @@
     const rng = G.rng;
     if (!keepOmen) {
       G.omen = first ? RD.OMENS[0] : rng.pick(RD.OMENS.slice(G.raid < 3 ? 1 : 0));
+      // everything unlocked is always for sale; three random pieces are 30% off tonight
       const top = RD.unlocked(G);
-      const pool = RD.SPECIAL.filter((k) => RD.ITEMS[k].tier <= top);
-      G.offers = rng.shuffle(pool).slice(0, 3);
-      G.sale = G.offers.length ? rng.pick(G.offers) : null;
+      const pool = Object.keys(RD.ITEMS).filter((k) => !RD.ITEMS[k].summonOnly && RD.ITEMS[k].tier <= top);
+      G.offers = rng.shuffle(pool).slice(0, RD.dealCount(G));
+      G.sale = null;
       if (G.omen.id === 'tithe') G.malice += 30;
       if (G.omen.id === 'leak') RD.leakSurvey(G, 8);
     }
+    if (!first && !keepOmen && RD.twisted(G, 'blind')) G.guild.K = RD.newKnow();
     const a = RD.assess(G);
     G.guild.threat = a.threat;
     G.party = RD.genParty(G, a);
   };
 
+  // New deals for tonight. The UI charges malice for it, or offers it after an optional ad.
+  RD.dealCount = (G) => (G.pact === 'market' ? 4 : 3);
+  RD.rerollCost = (G) => Math.max(1, (G.pact === 'market' ? 5 : 15) - 4 * (G.heart.ledger || 0));
+  RD.floorCost = (G) => Math.round(RD.FLOOR_COST[G.floors] * (1 - 0.15 * (G.heart.delve || 0)));
+  RD.rerollDeals = function (G) {
+    const top = RD.unlocked(G);
+    const pool = Object.keys(RD.ITEMS).filter((k) => !RD.ITEMS[k].summonOnly && RD.ITEMS[k].tier <= top);
+    const fresh = G.rng.shuffle(pool.filter((k) => !G.offers.includes(k)));
+    G.offers = fresh.concat(G.rng.shuffle(pool.filter((k) => G.offers.includes(k)))).slice(0, RD.dealCount(G));
+  };
+
   RD.costOf = function (G, type) {
-    const base = RD.ITEMS[type] ? RD.ITEMS[type].cost : RD.TOOLS[type].cost;
-    return G.sale === type ? Math.round(base * 0.7) : base;
+    const d = RD.ITEMS[type];
+    if (!d) return RD.TOOLS[type].cost;
+    let c = d.cost;
+    if (G.pact === 'bones' && d.kind === 'monster' && !d.boss) c *= 0.85;
+    if (G.pact === 'wyrm' && d.boss) c *= 0.8;
+    if (G.offers.includes(type) || G.sale === type) c *= 0.7;
+    if (RD.twisted(G, 'cheap')) c *= 0.75;
+    if (RD.twisted(G, 'thrones') && d.boss) c *= 0.6;
+    return Math.round(c);
   };
 
   RD.leakSurvey = function (G, n) {
@@ -509,16 +584,16 @@
   RD.canOpenFloor = function (G) {
     if (G.phase !== 'build') return 'Only between raids.';
     if (G.floors >= MAX_FLOORS) return 'The dungeon is as deep as it goes.';
-    const night = RD.FLOOR_UNLOCK[G.floors];
-    if (G.raid < night) return `Floor ${RD.ROMAN[G.floors]} can be dug from night ${night}.`;
-    const c = RD.FLOOR_COST[G.floors];
+    if (G.floors >= RD.maxFloors(G)) return `Floors below ${RD.ROMAN[G.floors - 1]} open in endless mode, from night ${RD.floorNight(G, G.floors)}.`;
+    if (G.raid < RD.floorNight(G, G.floors)) return `Floor ${RD.ROMAN[G.floors]} can be dug from night ${RD.floorNight(G, G.floors)}.`;
+    const c = RD.floorCost(G);
     if (G.malice < c) return `Needs ${c} malice. You have ${G.malice}.`;
     return null;
   };
 
   // Dig a new floor below the deepest one. The stairs go at the far end of the floor above,
   // and the hoard is carried down to the new floor for free.
-  RD.openFloor = function (G) {
+  RD.openFloor = function (G, theme) {
     const err = RD.canOpenFloor(G);
     if (err) return { err };
     const f = G.floors;
@@ -536,9 +611,11 @@
       if (u !== from && !G.items.has(u) && !G.links.has(u) && d > bd) { bd = d; best = u; }
       for (const v of NB[u]) if (dist[v - above * N] < 0 && G.tiles[v] === 1) { dist[v - above * N] = d + 1; q.push(v); }
     }
-    G.malice -= RD.FLOOR_COST[f];
+    G.malice -= RD.floorCost(G);
     G.stairs[above] = best % N;
     G.gates[f] = map.entrance;
+    G.themes = G.themes || ['halls'];
+    G.themes[f] = RD.THEMES[theme] ? theme : 'halls';
     G.floors++;
     linkFloors(G);
     G.hoard = f * N + map.hoard;
@@ -591,6 +668,11 @@
     const d = RD.ITEMS[type];
     if (tool !== 'move' && d.tier > RD.unlocked(G)) return `${RD.TIERS[d.tier]}-rank pieces unlock on night ${RD.TIER_UNLOCK[d.tier]}.`;
     if (it && i !== from) return 'Something already stands here.';
+    if (d.kind === 'seal') {
+      const boss = [...G.items.values()].some((o) => RD.ITEMS[o.type].boss && fl(o.tile) === fl(i));
+      if (!boss) return 'A boss seal needs a boss on the same floor.';
+      for (const o of G.items.values()) if (o.tile !== from && o.type === 'seal' && fl(o.tile) === fl(i)) return `Floor ${RD.ROMAN[fl(i)]} already has a boss seal.`;
+    }
     if (d.boss) {
       for (const o of G.items.values()) {
         if (o.tile === from || !RD.ITEMS[o.type].boss) continue;
@@ -598,6 +680,9 @@
         if (fl(o.tile) === fl(i)) return `Floor ${RD.ROMAN[fl(i)]} already has a boss (${RD.ITEMS[o.type].name}).`;
       }
     }
+    // storm fields interfere: pylons need room between them
+    const gap = RD.RULES.pylonSpacing && RD.GAP[type];
+    if (gap) for (const o of G.items.values()) if (o.tile !== from && o.type === type && RD.tdist(o.tile, i) < gap) return type === 'pylon' ? `Storm pylons interfere within ${gap} tiles of each other (one stands at ${RD.coord(o.tile)}).` : `${d.name}s need ${gap} tiles between them (one is at ${RD.coord(o.tile)}).`;
     if (d.place === 'wall') {
       if (floor) return `${d.name}s go into rock beside a corridor.`;
       if (!RD.nb(i).some((j) => G.tiles[j] === 1 && !RD.isGate(G, j))) return 'There is no corridor beside this rock.';
@@ -615,6 +700,10 @@
     return G.malice >= c ? null : `Needs ${c} malice. You have ${G.malice}.`;
   }
 
+  // Selling returns 60% of what was actually spent: the price paid at placement (after any deal,
+  // pact or twist discount) plus every level-up. Never the full list price, or discounts would mint malice.
+  RD.refund = (it) => Math.round(((it.price != null ? it.price : RD.ITEMS[it.type].cost) + (it.paid || 0)) * 0.6);
+
   RD.apply = function (G, tool, i, from) {
     const err = RD.check(G, tool, i, from);
     if (err) return { err };
@@ -622,8 +711,12 @@
     if (tool === 'fill') { G.tiles[i] = 0; G.malice -= RD.costOf(G, 'fill'); return { spent: RD.costOf(G, 'fill'), map: true }; }
     if (tool === 'sell') {
       const it = G.items.get(i);
-      const back = Math.round((RD.ITEMS[it.type].cost + (it.paid || 0)) * 0.6);
+      let back = RD.refund(it);
       G.items.delete(i);
+      // a seal cannot outlive the last boss on its floor
+      if (RD.ITEMS[it.type].boss && ![...G.items.values()].some((o) => RD.ITEMS[o.type].boss && fl(o.tile) === fl(i))) {
+        for (const o of [...G.items.values()]) if (o.type === 'seal' && fl(o.tile) === fl(i)) { back += RD.refund(o); G.items.delete(o.tile); }
+      }
       G.malice += back;
       return { gained: back };
     }
@@ -645,7 +738,7 @@
       return { moved: true };
     }
     const cost = RD.costOf(G, tool);
-    const it = { type: tool, tile: i, lv: 1, paid: 0 };
+    const it = { type: tool, tile: i, lv: 1, paid: 0, price: cost };
     freshItem(it);
     G.items.set(i, it);
     G.malice -= cost;
@@ -653,29 +746,42 @@
   };
 
   // Every number a piece will fight with, for the detail panel.
-  RD.pieceStats = function (type, lv) {
+  // `tier` overrides the blueprint's rank: summons and horde packs fight above their own
+  RD.pieceStats = function (type, lv, tier) {
     const d = RD.ITEMS[type];
-    const s = (k) => Math.round(RD.scaled(type, k, lv));
+    const s = (k) => Math.round(RD.scaled(type, k, lv, tier));
     const rows = [];
     if (d.hp != null) rows.push(['Health', s('hp')]);
     if (d.dmg != null) rows.push([d.kind === 'monster' ? 'Hit' : 'Damage', s('dmg')]);
     if (d.rate) rows.push(['Attacks', 'every ' + d.rate + 's']);
-    if (d.dmg != null && d.rate) rows.push(['Damage / s', Math.round(RD.scaled(type, 'dmg', lv) / d.rate)]);
+    if (d.dmg != null && d.rate) rows.push(['Damage / s', Math.round(RD.scaled(type, 'dmg', lv, tier) / d.rate)]);
     if (d.dps) rows.push(['Poison / s', s('dps')]);
     if (d.breath) rows.push([d.lord ? 'Hellfire' : 'Breath', `${s('breath')} every ${d.every}s`]);
     if (d.quake) rows.push(['Quake', `${s('quake')} + knockdown every ${d.every}s`]);
-    if (d.pct) rows.push(['Drains', Math.round(d.pct * 100) + '% of health']);
+    if (d.pct) rows.push(['Drains', Math.round(d.pct * 100) + '% of current health; again once healed above ' + Math.round(RD.SOUL_MEND * 100) + '%']);
     if (d.regen) rows.push(['Regrows', (d.regen * 100).toFixed(1) + '% / s']);
     if (d.summon) rows.push(['Summons', `${RD.ITEMS[d.summon].name} every ${d.every || 5}s (max ${d.max})`]);
     if (d.heads) rows.push(['Bites', `${d.heads} heroes at once`]);
     if (d.range && d.kind === 'monster') rows.push(['Reach', d.range + ' tiles']);
     if (d.range && d.kind === 'turret') rows.push(['Range', d.range + ' tiles']);
     if (d.leash) rows.push(['Guards', d.leash + ' tiles']);
-    if (d.root) rows.push(['Pins', d.root + 's']);
-    if (d.slow) rows.push(['Slows', d.slow + 's']);
-    if (d.stun) rows.push(['Stuns', d.stun + 's']);
-    if (d.confuse) rows.push(['Confuses', d.confuse + 's']);
-    if (d.rearm) rows.push(['Rearms', d.rearm + 's']);
+    const sec = (v) => v.toFixed(1) + 's';
+    if (d.root) rows.push(['Pins', sec(RD.lvDur(d, 'root', lv))]);
+    if (d.slow) rows.push(['Slows', sec(RD.lvDur(d, 'slow', lv))]);
+    if (d.stun) rows.push(['Stuns', sec(RD.lvDur(d, 'stun', lv))]);
+    if (d.confuse) rows.push(['Dazes', sec(RD.lvDur(d, 'confuse', lv))]);
+    if (d.rearm) rows.push(['Rearms', sec(RD.lvRearm(d, lv))]);
+    if (d.dur && d.dps && d.kind === 'trap' && d.radius == null) rows.push(['Poison for', d.dur + 's']);
+    if (d.call) rows.push(['Calls monsters', `within ${d.call} tiles`]);
+    if (d.cage) rows.push(['Cages', sec(RD.lvDur(d, 'cage', lv))]);
+    if (d.line) rows.push(['Rolls', d.line + ' tiles']);
+    if (d.den) rows.push(['Horde', `${d.count} × ${RD.ITEMS[d.pack].name}, fighting at ${RD.TIERS[Math.max(d.tier, RD.ITEMS[d.pack].tier)]}`]);
+    if (d.statue) rows.push(['Disguise', 'a statue until a hero is adjacent']);
+    if (d.armor) rows.push(['Stone skin', `${Math.round(d.armor * 100)}% less from range`]);
+    if (d.charge) rows.push(['Charge', `knocks down for ${d.charge}s`]);
+    if (d.petrify) rows.push(['Petrify', `${Math.round(d.petrify * 100)}% a bite`]);
+    if (d.fear) rows.push(['Terror', `${d.fear}s of panic`]);
+    if (d.aura) rows.push(['Room', `${d.aura === 'monster' ? 'monsters' : 'traps'} within ${d.auraR} tiles`]);
     return rows;
   };
 
@@ -688,10 +794,11 @@
     return rng.pick(RD.NAMES.first) + ' the Nameless';
   }
 
-  function rollTraits(rng) {
+  function rollTraits(rng, blackout) {
     const count = +rng.weighted({ 0: 3, 1: 4, 2: 2 });
     const pool = {};
     for (const k in RD.TRAITS) pool[k] = RD.TRAITS[k].w;
+    pool.stone *= (1 + 1.5 * Math.min(3, blackout || 0)) * (RD.G && RD.G.pact === 'silence' ? 0.5 : 1);
     const out = [];
     for (let n = 0; n < count; n++) {
       const t = rng.weighted(pool);
@@ -707,24 +814,29 @@
     const C = RD.CLASSES[cls];
     const D = RD.DIFF[G.diff];
     const rng = G.rng;
-    const lvl = vet ? vet.lvl + 1 : 1;
-    const traits = vet ? vet.traits.slice() : rollTraits(rng);
+    const lvl = vet ? vet.lvl : 1;
+    const traits = vet ? vet.traits.slice() : rollTraits(rng, G.guild.blackout);
+    if (RD.twisted(G, 'stones') && !traits.includes('stone')) traits.push('stone');
     const has = (t) => traits.includes(t);
-    const endless = 1 + Math.max(0, G.raid - D.win) * 0.05;
-    const grace = Math.min(1, 0.8 + 0.05 * G.raid); // the first few parties are green
-    const scale = RD.TIER_MULT[tier] * D.hero * (1 + 0.1 * (lvl - 1)) * endless * grace;
+    // ranks run out at SSS; after night 15 adventurers keep getting better gear and training
+    const era = 1 + D.growth * Math.max(0, RD.age(G) - 15);
+    const grace = G.raid === 1 ? 0.65 : Math.min(1, 0.8 + 0.05 * G.raid); // the first few parties are green
+    const nemesis = !!(vet && vet.nemesis);
+    const scale = RD.TIER_MULT[tier] * D.hero * (1 + 0.1 * (lvl - 1)) * era * grace * (1 + (G.guild.renown || 0)) * (nemesis ? 1.15 : 1);
     const h = {
       id: G.nextId++,
       name: vet ? vet.name : heroName(rng, used),
       title: C.unique ? RD.TITLES[cls] : '',
       cls, tier, lvl, traits,
       maxHp: Math.round(C.hp * scale * (has('stout') ? 1.25 : 1)),
-      speed: C.speed * (has('swift') ? 1.2 : 1),
+      speed: C.speed * (has('swift') ? 1.2 : 1) * (RD.twisted(G, 'rush') ? 1.2 : 1),
+      nemesis, escapes: vet ? vet.escapes || 0 : 0,
       dmg: C.dmg * scale,
       rate: C.rate, range: C.range, vision: C.vision,
       brave: C.brave + (has('reckless') ? 0.3 : 0),
       greed: C.greed + (has('greedy') ? 0.5 : 0) + (G.omen && G.omen.id === 'bounty' ? 0.3 : 0),
-      fleeAt: cls === 'chosen' ? 0 : has('coward') ? 0.5 : has('reckless') ? 0.1 : C.fleeAt,
+      // first-night rookies are too proud to run
+      fleeAt: cls === 'chosen' ? 0 : G.raid === 1 ? 0.05 : has('coward') ? 0.5 : has('reckless') ? 0.1 : C.fleeAt,
       reck: has('reckless') ? 0.6 : 0,
       seed: (rng.next() * 100000) | 0,
     };
@@ -732,54 +844,122 @@
     return h;
   };
 
+  // Which classes can fill a role at a given rank.
+  const ROLES = {
+    tank: [['knight', 3], ['berserker', 2], ['paladin', 0.25]],
+    healer: [['cleric', 3], ['bard', 1], ['saint', 0.15]],
+    trapper: [['rogue', 3], ['ranger', 2], ['shadow', 0.3]],
+    seer: [['mage', 3], ['alchemist', 1], ['archmage', 0.25]],
+  };
+  const canBe = (cls, t) => (RD.CLASSES[cls].minTier || 0) <= t;
+
+  // The boss hunters the guild sends for each kind of boss.
+  const HUNTERS = {
+    goblinking: ['knight', 'berserker'], lich: ['paladin', 'cleric', 'saint'], dragon: ['dragonslayer', 'knight', 'alchemist'],
+    hydra: ['dragonslayer', 'swordsaint', 'archmage'], behemoth: ['dragonslayer', 'paladin', 'berserker'], demonlord: ['chosen', 'saint', 'swordsaint'],
+  };
+
   RD.genParty = function (G, a) {
-    const rng = G.rng, gu = G.guild, D = RD.DIFF[G.diff];
+    const rng = G.rng, gu = G.guild, D = RD.DIFF[G.diff], K = gu.K;
     a = a || RD.assess(G);
-    const cap = Math.min(8, RD.unlocked(G) + 1);
-    const T = Math.min(cap, a.threat);
-    let n = Math.max(2, Math.min(8, 3 + Math.floor((G.raid - 1) / 5) + (G.raid > 5 ? D.party : 0)));
+    const top = RD.unlocked(G);
+    const cap = Math.min(8, top + 1);
+    const T = Math.max(0, Math.min(cap + (RD.twisted(G, 'blind') ? 0.6 : 0), a.threat + (RD.twisted(G, 'blind') ? 0.6 : 0)) - (RD.twisted(G, 'swarm') ? 1 : 0));
+    const age = RD.age(G);
+    let n = 3 + Math.floor((age - 1) / 5) + (age > 5 ? D.party : 0) + (gu.blackout >= 2 ? 1 : 0);
+    n = Math.max(2, Math.min(10, n));
     if (G.raid === 1) n = Math.max(2, n - 1);
     if (G.omen.id === 'bounty') n++;
+    if (RD.twisted(G, 'swarm')) n += 2;
     const roll = () => Math.max(0, Math.min(cap, Math.round(T) + +rng.weighted({ '-1': 0.3, 0: 0.58, 1: 0.12 })));
     const c = gu.causes;
-    const w = {};
-    for (const k of RD.COMMON) w[k] = RD.CLASSES[k].w;
-    w.rogue += c.trap * 0.5;
-    w.mage += c.illusion * 0.7;
-    w.knight += c.monster * 0.35 + c.turret * 0.45;
-    w.cleric += c.monster * 0.4;
-    w.scout += (1 - RD.coverage(G, gu.K)) * 2 + (gu.wariness || 0) * 2;
     const used = new Set();
     const party = [];
     let legend = false;
-    const hire = (cls, tier, vet) => {
+    // one legend per party, except strike teams, which are made of them
+    const hire = (cls, tier, vet, team) => {
+      if (RD.CLASSES[cls].unique && legend && !team && cls !== 'chosen') cls = rng.pick(['knight', 'mage', 'cleric']);
+      if (!canBe(cls, tier) && cls !== 'chosen') cls = 'knight';
       const h = RD.makeHero(G, cls, tier, vet, used);
       if (RD.CLASSES[cls].unique) legend = true;
       party.push(h);
       return h;
     };
-    // a demon lord in the guild's books means the Chosen Hero walks in
-    const lordKnown = [...gu.K.lairs.values()].some((t) => RD.ITEMS[t].lord);
-    if (lordKnown) hire('chosen', Math.max(7, Math.min(8, Math.round(T))));
+    const pickRole = (role, t) => {
+      const pool = {};
+      for (const [cls, w] of ROLES[role]) if (canBe(cls, t) && !(RD.CLASSES[cls].unique && legend)) pool[cls] = w;
+      return rng.weighted(pool);
+    };
+    const notes = [];
+
+    // a strike team for the most dangerous boss the guild knows about
+    let boss = null;
+    for (const [t, type] of K.lairs) { const d = RD.ITEMS[type]; if (d.boss && (!boss || d.tier > RD.ITEMS[boss.type].tier)) boss = { type, tile: t }; }
+    if (boss) {
+      const bd = RD.ITEMS[boss.type];
+      if (bd.lord || rng.chance(bd.myth ? 0.85 : 0.55)) {
+        const tier = Math.max(0, Math.min(8, Math.max(Math.round(T), bd.tier + (bd.myth ? 1 : 0))));
+        const team = HUNTERS[boss.type] || ['knight', 'mage'];
+        const size = bd.lord || bd.myth ? 3 : 2;
+        for (let k = 0; k < size; k++) {
+          let cls = team[k % team.length];
+          if (!canBe(cls, tier)) cls = cls === 'chosen' ? 'chosen' : 'knight';
+          const h = hire(cls, cls === 'chosen' ? Math.max(tier, 7) : tier, null, true);
+          h.hunt = boss.tile;
+          h.team = true;
+        }
+        n += 1;
+        notes.push(bd.lord ? 'The Chosen Hero leads a strike team against your Demon Lord.' : `A strike team is hunting your ${bd.name} at ${RD.coord(boss.tile)}.`);
+      }
+    }
+
+    // veterans who earned their return
     for (const v of rng.shuffle(gu.veterans.slice())) {
       if (party.length >= n - 1) break;
-      if (rng.chance(0.6)) {
-        hire(v.cls, Math.min(cap, v.tier + (rng.chance(0.4) ? 1 : 0)), v);
+      if (v.nemesis || rng.chance(0.65)) {
+        hire(v.cls, Math.min(cap, v.tier || 0), v);
         gu.veterans.splice(gu.veterans.indexOf(v), 1);
       }
     }
     if (G.omen.id === 'pilgrims') hire('cleric', roll());
-    // the guild always hires at least one counter to whatever killed the most heroes
-    const top = Object.entries(c).sort((x, y) => y[1] - x[1])[0];
-    const counter = { trap: 'rogue', illusion: 'mage', monster: rng.pick(['knight', 'cleric']), turret: 'knight' }[top[0]];
-    if (top[1] > 0 && party.length < n && !party.some((h) => h.cls === counter)) hire(counter, roll());
+
+    // roles the guild insists on, from what it knows and what has been killing its people
+    const illusions = [...K.traps.values()].filter((v) => RD.ITEMS[v.type].sense === 'illusion').length + K.mimics.size
+      + [...K.lairs.values()].filter((t) => RD.ITEMS[t].cat === 'illusion').length;
+    const has = (role) => party.some((h) => ROLES[role].some(([cls]) => cls === h.cls));
+    const need = [];
+    if (K.traps.size >= 2 || c.trap >= 2) need.push('trapper');
+    if (illusions >= 1 || c.illusion >= 2) need.push('seer');
+    if (n >= 4 || T >= 2) need.push('tank');
+    if (n >= 4) need.push('healer');
+    for (const role of need) if (party.length < n && !has(role)) { const t = roll(); hire(pickRole(role, t), t); }
+
+    // the first night is a lesson: two green F-rank adventurers, no healers
+    if (G.raid === 1) {
+      while (party.length < n) hire(rng.pick(['knight', 'rogue', 'scout']), 0);
+    }
     while (party.length < n) {
       const t = roll();
+      const w = {};
+      for (const k of RD.COMMON) if (canBe(k, t)) w[k] = RD.CLASSES[k].w;
+      w.rogue += c.trap * 0.4;
+      w.mage += c.illusion * 0.5;
+      w.knight += c.monster * 0.3 + c.turret * 0.4;
+      if (w.berserker) w.berserker += c.monster * 0.2;
+      w.cleric += c.monster * 0.3;
+      w.scout += (1 - RD.coverage(G, K)) * 2 + (gu.wariness || 0) * 2;
+      if (w.tamer) w.tamer += c.monster * 0.2;
+      if (w.ninja) w.ninja += c.trap * 0.2;
+      if (G.themes && G.themes.includes('crypt')) w.cleric += 1;
       let cls = rng.weighted(w);
-      if (!legend && rng.chance(0.045 * D.rare * (1 + 0.2 * t))) {
+      if (!legend && (RD.twisted(G, 'legends') || rng.chance(0.045 * D.rare * (1 + 0.2 * t)))) {
         const pool = {};
-        for (const u of RD.UNIQUE) if (u !== 'chosen' && RD.CLASSES[u].minTier <= t) pool[u] = RD.CLASSES[u].w;
-        if (t >= RD.CLASSES.chosen.minTier) pool.chosen = RD.CLASSES.chosen.w;
+        for (const u of RD.UNIQUE) if (u !== 'chosen' && canBe(u, t)) pool[u] = RD.CLASSES[u].w;
+        // the guild sends the right specialist when it knows what it is facing
+        const known = [...K.lairs.values()];
+        if (pool.goblinslayer && known.filter((ty) => RD.hasTag(ty, 'goblinoid')).length >= 3) pool.goblinslayer *= 4;
+        if (pool.phantomthief && [...G.items.values()].some((it) => it.type === 'seal') && K.lairs.size) pool.phantomthief *= 3;
+        if (pool.shieldhero && known.filter((ty) => RD.ITEMS[ty].elite).length >= 2) pool.shieldhero *= 3;
         if (Object.keys(pool).length) cls = rng.weighted(pool);
       }
       hire(cls, t);
@@ -787,19 +967,15 @@
 
     // explain the guild's thinking
     const L = RD.rating(T);
-    const why = {
-      trap: 'Traps killed the most heroes, so the guild hires rogues.',
-      illusion: 'Illusions killed the most heroes, so the guild hires mages.',
-      monster: 'Your monsters killed the most heroes, so the guild sends knights and clerics.',
-      turret: 'Wall traps killed the most heroes, so the guild sends heavier armour.',
-    };
     let line;
     if (G.raid === 1) line = 'The guild knows nothing about you yet. They send a small party to look around.';
     else if (a.why && a.seen >= a.base && a.seen > 0.5) line = `They saw the ${RD.ITEMS[a.why.type].name.toLowerCase()} at ${RD.coord(a.why.tile)} and rated the dungeon to match.`;
+    else if (gu.blackout >= 2) line = 'Their last parties never came back. This one is bigger and carries sending stones.';
     else if (gu.pressure > 0.3) line = 'Too many of their own have died here. They are sending stronger blades.';
-    else if (top[1] > 0) line = why[top[0]];
+    else if (a.base >= a.seen) line = 'Adventurers everywhere are getting stronger, and the guild sends its usual best.';
     else line = 'No one has died to you yet. The guild is getting bold.';
-    G.adapt = `Guild rating: ${L}-rank. ${line}${lordKnown ? ' The Chosen Hero has answered the call.' : ''}`;
+    if (gu.renown > 0.005) notes.push(`Renown +${Math.round(gu.renown * 100)}%: every night they fail to take gold, they train harder.`);
+    G.adapt = `Guild rating: ${L}-rank. ${line}${notes.length ? ' ' + notes.join(' ') : ''}`;
     return party;
   };
 })();

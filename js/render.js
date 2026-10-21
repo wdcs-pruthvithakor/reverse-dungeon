@@ -900,6 +900,9 @@
       default: c.beginPath(); c.moveTo(-k, k * 0.6); c.lineTo(0, -k * 0.6); c.lineTo(k, k * 0.6); c.stroke(); c.beginPath(); c.moveTo(-k * 0.6, k * 1.1); c.lineTo(0, 0); c.lineTo(k * 0.6, k * 1.1); c.stroke();
     }
   }
+  // for the guide's little scenes: a hero or a staircase at any point on any canvas
+  RD.drawHero = function (c, h, cx, cy, s) { c.save(); c.translate(cx, cy); heroGlyph(c, h, s); c.restore(); };
+  RD.drawStairs = (c, cx, cy, s, up) => stairs(c, cx, cy, s, up);
   RD.heroIcon = function (cv, h, size) {
     const d = Math.min(2, window.devicePixelRatio || 1);
     cv.width = size * d; cv.height = size * d;
@@ -1162,6 +1165,21 @@
     }
 
     if (V.guildMap) drawGuildMap(c, G, R ? (R.feud ? G.guild.K : R.shared) : G.guild.K);
+
+    // a scried raid: blue footprints where the rehearsed heroes walked, darker where they walked most
+    const fc = ui.forecast;
+    if (fc && ui.showHeat && !fc.stale && G.phase === 'build' && fc.night === G.raid) {
+      const base = F * N;
+      for (let i = 0; i < N; i++) {
+        const v = fc.heat[base + i];
+        if (!(v > 0.03)) continue;
+        const [cx, cy] = tc(base + i);
+        c.fillStyle = `rgba(156,192,230,${0.18 + 0.55 * v})`;
+        for (const [dx, dy, r] of [[-0.12, 0.08, 0], [0.12, -0.08, 0.4]]) {
+          c.beginPath(); c.ellipse(cx + dx * T, cy + dy * T, T * 0.07, T * 0.12, r, 0, Math.PI * 2); c.fill();
+        }
+      }
+    }
 
     // tutorial markers: pulsing gold rings on the tiles the coach is talking about
     for (const g of V.marks) {

@@ -852,3 +852,52 @@ kbd {
 .st.lvls tr:first-child th { color: var(--gold); font-family: var(--f-mono); }
 .detail #piece-more { display: block; margin-top: 8px; }
 .minion .st { width: auto; }
+
+/* how to play: looping scenes */
+.lessons { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.lesson { border: 1px solid var(--rule); background: var(--void); padding: 8px; display: grid; gap: 8px; align-content: start; }
+.lesson canvas { width: 100%; height: auto; display: block; background: var(--void); border: 1px solid #2a2230; }
+.lesson b { color: var(--gold); }
+.lesson p { margin: 4px 0 6px; font-size: var(--s-sm); line-height: 1.4; }
+.lesson .ghost.small { margin-top: 0; }
+
+/* "show me": a pulsing spotlight on the real control */
+.spot { outline: 2px solid var(--gold) !important; outline-offset: 3px; animation: spot 0.7s ease-in-out infinite alternate; position: relative; z-index: 6; }
+@keyframes spot { from { box-shadow: 0 0 0 0 rgba(227, 176, 75, 0.0); } to { box-shadow: 0 0 18px 4px rgba(227, 176, 75, 0.55); } }
+
+/* scrying: the rehearsed raid */
+.forecast {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: min(340px, calc(100% - 20px));
+  max-height: calc(100% - 70px);
+  overflow: auto;
+  background: rgba(13, 11, 16, 0.95);
+  border: 1px solid var(--steel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  padding: 10px 12px;
+  z-index: 3;
+  font-size: var(--s-sm);
+}
+.forecast header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.forecast header .eyebrow { display: block; font-family: var(--f-mono); font-size: var(--s-xs); letter-spacing: 0.14em; text-transform: uppercase; color: var(--steel); }
+.forecast header .ghost.small { margin-top: 0; }
+.forecast .big { margin: 8px 0 2px; font-size: var(--s-md); color: var(--bone); font-weight: 700; }
+.forecast .note.warn { color: var(--gold); }
+.forecast .heat { display: flex; gap: 6px; align-items: center; margin-top: 8px; color: var(--ash); font-size: var(--s-xs); }
+#scry .m { font-family: var(--f-mono); color: var(--malice-hi); margin-left: 4px; }
+
+/* the night's damage, piece by piece */
+.dmg { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 4px; }
+.dmg li { display: grid; grid-template-columns: auto minmax(90px, 1.2fr) 2fr auto; gap: 8px; align-items: center; font-size: var(--s-sm); }
+.forecast .dmg li { grid-template-columns: minmax(80px, 1.2fr) 1.4fr auto; }
+.dmg canvas { background: #2c2530; }
+.dmg .nm small { color: var(--ash); font-family: var(--f-mono); font-size: var(--s-xs); }
+.dmg .bar { height: 8px; background: #241d28; }
+.dmg .bar i { display: block; height: 100%; background: var(--malice); }
+.dmg .v { font-family: var(--f-mono); font-size: var(--s-xs); color: var(--bone); white-space: nowrap; }
+.combo-line b { color: #ffd34d; }
+.tips { list-style: none; margin: 8px 0 4px; padding: 0; display: grid; gap: 6px; }
+.tips li { border-left: 3px solid var(--gold); background: rgba(227, 176, 75, 0.07); padding: 6px 10px; font-size: var(--s-sm); }
+.tips li::before { content: 'Fix · '; color: var(--gold); font-family: var(--f-mono); font-size: var(--s-xs); letter-spacing: 0.1em; text-transform: uppercase; }

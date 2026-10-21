@@ -77,6 +77,7 @@
       queue: G.party.slice(), spawnT: 0.4, shared, feud: omen(G, 'feud'),
       report: null, killed: [], escaped: [], goldTaken: 0, goldBack: 0, malice: 0,
       powers: Object.fromEntries(Object.keys(RD.POWERS).map((k) => [k, 0])), seals: {}, douseT: 0, frenzyT: 0, sealT: 0, lure: null, rubble: [],
+      src: null, dealt: {}, fired: new Set(), combos: {}, healed: 0, disarmed: 0, jammed: 0, comboLock: false,
       startGold: G.gold, bones: [], seen: new Set(),
     });
     for (const it of G.items.values()) {
@@ -407,7 +408,15 @@
   const hold = (h, d, key, lv) => RD.lvDur(d, key, lv) * resist(h, d) * (RD.G ? RD.themeMult(RD.G, d.id, h.tile, 'hold') : 1);
   const unbound = (h) => !!RD.CLASSES[h.cls].unbound; // ninjas shrug off pins, slows and cages
 
+  // R.src names whoever is dealing damage right now (a placed piece, a monster, or a power), so hurt()
+  // can credit the right piece in the night's report and check for combos
   function trigger(G, R, h, it) {
+    const was = R.src;
+    R.src = it;
+    R.fired.add('it:' + it.tile);
+    try { triggerOnce(G, R, h, it); } finally { R.src = was; }
+  }
+  function triggerOnce(G, R, h, it) {
     const d = RD.ITEMS[it.type];
     const kt = h.K.traps.get(it.tile);
     const known = kt && kt.type === it.type;
@@ -453,7 +462,7 @@
         log(R, `The ceiling comes down on ${h.name} at ${where}.`, 'hit');
         break;
       case 'vent':
-        R.clouds.push({ x, y, f, r: d.radius, t: d.dur, life: d.dur, dps: RD.scaled(it.type, 'dps', it.lv) });
+        R.clouds.push({ x, y, f, r: d.radius, t: d.dur, life: d.dur, dps: RD.scaled(it.type, 'dps', it.lv), src: it });
         log(R, `Miasma pours from the grate at ${where}.`, 'hit');
         break;
       case 'maze':
@@ -483,7 +492,7 @@
       }
       case 'poison':
         hurt(G, R, h, dmg, 'trap');
-        h.poison = { dps: RD.scaled(it.type, 'dps', it.lv) * RD.themeMult(G, it.type, it.tile, 'dmg'), t: d.dur };
+        h.poison = { dps: RD.scaled(it.type, 'dps', it.lv) * RD.themeMult(G, it.type, it.tile, 'dmg'), t: d.dur, src: it };
         RD.burst(x, y, '#86c06a', 8, 1.2, f);
         log(R, `A needle pricks ${h.name} at ${where}. Poison.`, 'hit');
         break;
@@ -563,12 +572,56 @@
   // moments the page reacts to (the dungeon's voice, hit-stop, slow motion); headless runs ignore them
   const emit = (type, data) => { if (RD.onEvent) RD.onEvent(type, data); };
 
+  // the piece a source belongs to, as a key that survives a save: summons count for their boss, packs for their den
+  const srcKey = (src) => {
+    if (!src) return null;
+    if (src.power) return 'power:' + src.power;
+    if (src.d) { const it = src.item || (src.summoner && src.summoner.item); return it ? 'it:' + it.tile : 'power:raise'; }
+    return 'it:' + src.tile;
+  };
+  RD.srcKey = srcKey;
+  // Combos: a hero already caught by one thing takes more from the next. First match wins.
+  function comboOf(h, src) {
+    const t = src && src.type;
+    const d = t && RD.ITEMS[t];
+    if (!d) return null;
+    const trap = d.kind === 'trap' || d.kind === 'turret';
+    if (trap && (h.rootT > 0 || h.cageT > 0)) return 'skewer';
+    if (trap && RD.COMBOS.shatter.types.includes(t) && h.slowT > 0) return 'shatter';
+    if (RD.hasTag(t, 'fire') && (h.poison || h.gasT > 0)) return 'kindling';
+    if (d.kind === 'monster' && h.confuse > 0) return 'ambush';
+    if (d.kind === 'monster' && h.stun > 0) return 'pileon';
+    if (d.kind === 'monster' && h.fearT > 0) return 'panic';
+    return null;
+  }
   function hurt(G, R, h, dmg, cat, aoe) {
     if (!alive(h)) return;
     const C = RD.CLASSES[h.cls];
     if (aoe && C.fireward) dmg *= C.fireward;
     if (C.guard) dmg *= C.guard;
     if (C.dodge && cat !== 'power' && Math.random() < C.dodge) { RD.floater(h.x, h.y - 0.3, 'dodged', '#9cc0e6', false, fl(h.tile)); return; }
+    const combo = R.comboLock ? null : comboOf(h, R.src);
+    if (combo) {
+      dmg *= RD.COMBOS[combo].mult;
+      R.combos[combo] = (R.combos[combo] || 0) + 1;
+      RD.floater(h.x, h.y - 0.9, RD.COMBOS[combo].name + '!', '#ffd34d', true, fl(h.tile));
+      emit('combo', { id: combo, h });
+      if (combo === 'kindling') {
+        // the gas goes up: a third of the blow scorches everyone close by
+        R.comboLock = true;
+        RD.ring(h.x, h.y, 1.2, '#ff8a3d', fl(h.tile));
+        for (const o of heroesNear(R, fl(h.tile), h.x, h.y, 1.2)) if (o !== h) hurt(G, R, o, dmg * 0.3, cat, true);
+        R.comboLock = false;
+      }
+    }
+    // the night's tally: how much each piece actually took off the heroes
+    const key = srcKey(R.src);
+    if (key) {
+      const e = R.dealt[key] || (R.dealt[key] = { dmg: 0, kills: 0, hits: 0 });
+      e.dmg += Math.min(Math.max(0, h.hp), dmg);
+      e.hits++;
+      h.lastSrc = key;
+    }
     h.hp -= dmg;
     h.hurtTaken += dmg / h.maxHp;
     h.cat = cat;
@@ -614,6 +667,7 @@
     G.stats.slain++;
     if (h.title) G.stats.legends++;
     R.killed.push(h);
+    if (h.lastSrc && R.dealt[h.lastSrc]) R.dealt[h.lastSrc].kills++;
     emit('kill', h);
     R.bones.push({ x: h.x, y: h.y, f: fl(h.tile), r: Math.random() * 6 });
     RD.burst(h.x, h.y, '#c43c68', 18, 3, fl(h.tile));
@@ -685,11 +739,12 @@
     else if (h.steadyT > 0) h.steadyT -= dt;
     if (h.poison) {
       h.poisonAcc = (h.poisonAcc || 0) + h.poison.dps * dt;
-      if (h.poisonAcc >= 3) { hurt(G, R, h, h.poisonAcc, 'trap'); h.poisonAcc = 0; }
+      if (h.poisonAcc >= 3) { R.src = h.poison.src; hurt(G, R, h, h.poisonAcc, 'trap'); R.src = null; h.poisonAcc = 0; }
       if ((h.poison.t -= dt) <= 0) h.poison = null;
       if (!alive(h)) return;
     }
     if (h.fearT > 0) h.fearT -= dt;
+    if (h.gasT > 0) h.gasT -= dt;
     // a torn soul mends once the hero is healed back above SOUL_MEND of their health (and not straight away)
     if (h.soulTorn && h.hp >= h.maxHp * RD.SOUL_MEND && R.t - (h.tornAt || 0) >= 5) { h.soulTorn = false; RD.floater(h.x, h.y - 0.4, 'soul mended', '#e05a86', false, fl(h.tile)); }
     if (h.cageT > 0) { h.cageT -= dt; return; } // caged: no moving, no fighting
@@ -705,7 +760,7 @@
 
     if (C.heal) {
       const amt = C.heal * scaleOf(h) * dt;
-      for (const o of R.heroes) if (alive(o) && o !== h && o.hp < o.maxHp && udist(o, h) <= C.healR) o.hp = Math.min(o.maxHp, o.hp + amt);
+      for (const o of R.heroes) if (alive(o) && o !== h && o.hp < o.maxHp && udist(o, h) <= C.healR) { R.healed += Math.min(amt, o.maxHp - o.hp); o.hp = Math.min(o.maxHp, o.hp + amt); }
     }
     if (C.cure && (h.cureT -= dt) <= 0) {
       for (const o of R.heroes) if (alive(o) && o !== h && udist(o, h) <= C.cure && (o.rootT > 0 || o.confuse > 0 || o.slowT > 0)) {
@@ -795,6 +850,7 @@
       h.jamT -= dt;
       if (h.jamT <= 0) {
         it.jamT = 12;
+        R.jammed++;
         const [x, y] = center(h.jamAt);
         RD.floater(x, y, 'jammed 12s', '#9cc0e6', false, fl(h.jamAt));
         h.xp += 2;
@@ -813,6 +869,7 @@
         const [x, y] = center(j);
         if (it && RD.ITEMS[it.type].kind === 'trap') {
           it.off = true;
+          R.disarmed++;
           const kt = h.K.traps.get(j);
           if (kt) kt.off = true;
           RD.floater(x, y, 'disarmed', '#9cc0e6', false, fl(j));
@@ -870,6 +927,11 @@
   }
 
   function tickMonster(G, R, m, dt) {
+    R.src = m;
+    tickMonsterOnce(G, R, m, dt);
+    R.src = null;
+  }
+  function tickMonsterOnce(G, R, m, dt) {
     if (m.dead) return;
     const d = m.d;
     m.cd -= dt;
@@ -988,6 +1050,11 @@
 
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   function tickTurret(G, R, it, dt) {
+    R.src = it;
+    tickTurretOnce(G, R, it, dt);
+    R.src = null;
+  }
+  function tickTurretOnce(G, R, it, dt) {
     if (it.jamT > 0) return; // jammed for a while
     it.cd -= dt;
     if (it.cd > 0) return;
@@ -1062,7 +1129,8 @@
       c.t -= dt;
       for (const h of R.heroes) if (alive(h) && fl(h.tile) === c.f && Math.hypot(h.x - c.x, h.y - c.y) <= c.r) {
         h.cloudAcc = (h.cloudAcc || 0) + c.dps * dt;
-        if (h.cloudAcc >= 4) { hurt(G, R, h, h.cloudAcc, 'trap'); h.cloudAcc = 0; }
+        h.gasT = 0.5; // standing in poison gas, for the Kindling combo
+        if (h.cloudAcc >= 4) { R.src = c.src; hurt(G, R, h, h.cloudAcc, 'trap'); R.src = null; h.cloudAcc = 0; }
       }
     }
     R.clouds = R.clouds.filter((c) => c.t > 0);
@@ -1126,6 +1194,7 @@
     }
     G.malice -= cost;
     emit('power', power);
+    R.src = { power };
     R.powers[power] = p.cd * (G.heart && G.heart.haste ? 1 - 0.1 * G.heart.haste : 1);
     sfx('power');
     switch (power) {
@@ -1236,6 +1305,7 @@
         log(R, 'The front gate slams shut.', 'hit');
         break;
     }
+    R.src = null;
     return null;
   };
 
@@ -1338,6 +1408,7 @@
     G.debrief = {
       raid: G.raid, killed: R.killed.slice(), escaped: R.escaped.slice(), intel, rumors,
       malice: R.malice, income, goldLost: Math.max(0, lost), gold: G.gold,
+      report: RD.nightReport(G, R),
     };
     G.history.unshift({
       raid: G.raid, omen: G.omen.name, rating: RD.rating(gu.threat), floors: G.floors,
@@ -1349,6 +1420,85 @@
     else if (G.raid >= RD.winAt(G) && !G.endless) { G.phase = 'over'; G.result = 'won'; }
     if (RD.onRaidEnd) RD.onRaidEnd(G);
   }
+
+  // ---------------------------------------------------------------- why it went the way it did
+  // Each piece's share of the damage and kills, the pieces that never touched a hero, and up to three fixes.
+  const FIGHTERS = new Set(['trap', 'turret', 'monster']);
+  RD.nightReport = function (G, R) {
+    const pieces = Object.entries(R.dealt).map(([key, e]) => {
+      let name = 'Something', type = null, tile = null;
+      if (key.startsWith('it:')) { tile = +key.slice(3); const it = G.items.get(tile); if (it) { type = it.type; name = RD.ITEMS[type].name; } }
+      else { const k = key.slice(6); type = 'power:' + k; name = k === 'raise' ? 'Raised skeletons' : RD.POWERS[k].name; }
+      return { key, type, tile, name, dmg: Math.round(e.dmg), kills: e.kills };
+    }).sort((a, b) => b.dmg - a.dmg);
+    const total = pieces.reduce((a, p) => a + p.dmg, 0);
+    const busy = new Set([...Object.keys(R.dealt), ...R.fired]);
+    const idle = [...G.items.values()].filter((it) => FIGHTERS.has(RD.ITEMS[it.type].kind) && !busy.has('it:' + it.tile)).map((it) => it.tile);
+    const gold = Math.max(0, R.goldTaken - R.goldBack);
+    const tips = [];
+    const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+    if (R.healed > Math.max(150, total * 0.2)) tips.push({ id: 'heal', text: `Healers mended ${Math.round(R.healed)} health, ${Math.round((100 * R.healed) / Math.max(1, total))}% of all the damage you dealt. Kill them first: they hang back, so a dart slit or a second monster further along catches them, and Doom Bolt can pick one off.` });
+    if (gold > 0 && ![...G.items.values()].some((it) => RD.ITEMS[it.type].kind === 'monster' && fl(it.tile) === fl(G.hoard) && RD.tdist(it.tile, G.hoard) <= 2)) tips.push({ id: 'hoard', text: `Heroes reached the hoard and took ${gold} gold with nothing guarding it. Put a monster within 2 tiles of the gold so they have to fight for it.` });
+    if (R.disarmed + R.jammed > 0) tips.push({ id: 'rogue', text: `Rogues switched off ${n(R.disarmed, 'trap', 'traps')}${R.jammed ? ` and jammed ${n(R.jammed, 'wall piece', 'wall pieces')}` : ''}. They only disarm what the guild knows about: move known traps (they have an eye on the Guild’s map), or use a False Floor, which can’t be disarmed.` });
+    if (idle.length) tips.push({ id: 'idle', text: `${n(idle.length, 'piece', 'pieces')} never touched a hero. They are ringed on the map: move them onto the path heroes take (Move is free).` });
+    if (pieces.length > 1 && total > 0 && pieces[0].dmg > total * 0.6) tips.push({ id: 'carry', text: `${pieces[0].name} did ${Math.round((100 * pieces[0].dmg) / total)}% of all the damage. Level it up, or build a second one further along the route.` });
+    if (R.escaped.length && !Object.keys(R.combos).length) tips.push({ id: 'combo', text: 'No combos landed. Pin a hero with a Bear Trap in the line of a Dart Slit for +50%: the Guide’s Combos tab lists them all.' });
+    return { pieces: pieces.slice(0, 8), total, idle, healed: Math.round(R.healed), disarmed: R.disarmed, jammed: R.jammed, combos: { ...R.combos }, tips: tips.slice(0, 3) };
+  };
+
+  // ---------------------------------------------------------------- scrying: tonight's raid, rehearsed
+  RD.scryCost = (G) => Math.round(10 + 6 * RD.unlocked(G));
+  // the shape of the dungeon a forecast was made for; any change makes the forecast stale
+  RD.buildSig = (G) => {
+    let h = 0;
+    for (let i = 0; i < G.floors * N; i++) h = (h * 31 + G.tiles[i] + 2) | 0;
+    return `${h}|${G.hoard}|${G.floors}|${[...G.items.values()].map((it) => it.type + it.tile + '.' + it.lv).sort().join()}`;
+  };
+  // Run tonight's raid `runs` times on copies of the dungeon, out of sight, and average what happened.
+  RD.forecast = function (G, runs) {
+    const save = JSON.stringify(RD.saveGame(G));
+    const keep = { G: RD.G, sfx: RD.sfx, ev: RD.onEvent, end: RD.onRaidEnd, shake: FX.shake, n: Object.fromEntries(Object.keys(FX).filter((k) => Array.isArray(FX[k])).map((k) => [k, FX[k].length])) };
+    RD.sfx = null; RD.onEvent = null; RD.onRaidEnd = null;
+    const heat = new Float32Array(G.floors * N);
+    const sum = { killed: 0, escaped: 0, gold: 0, dealt: {}, combos: {}, healed: 0, fired: new Set() };
+    try {
+      for (let r = 0; r < runs; r++) {
+        const g = RD.loadGame(JSON.parse(save));
+        // scouting is never exact: every hero is up to 10% stronger or weaker than the scry assumes
+        for (const h of g.party) { const k = 0.9 + 0.2 * Math.random(); h.maxHp = Math.round(h.maxHp * k); h.hp = h.maxHp; h.dmg *= 0.9 + 0.2 * Math.random(); }
+        RD.startRaid(g);
+        for (let k = 0; k < 30 * 400 && g.phase === 'raid'; k++) {
+          RD.step(g, 1 / 30);
+          if (k % 6 === 0) for (const h of g.R.heroes) if (alive(h) && h.tile != null) heat[h.tile]++;
+        }
+        const R = g.R;
+        sum.killed += R.killed.length;
+        sum.escaped += R.escaped.length;
+        sum.gold += Math.max(0, R.goldTaken - R.goldBack);
+        sum.range = sum.range || { killed: [99, 0], gold: [1e9, 0] };
+        sum.range.killed = [Math.min(sum.range.killed[0], R.killed.length), Math.max(sum.range.killed[1], R.killed.length)];
+        sum.range.gold = [Math.min(sum.range.gold[0], Math.max(0, R.goldTaken - R.goldBack)), Math.max(sum.range.gold[1], Math.max(0, R.goldTaken - R.goldBack))];
+        sum.healed += R.healed;
+        for (const [k, e] of Object.entries(R.dealt)) { const a = sum.dealt[k] || (sum.dealt[k] = { dmg: 0, kills: 0 }); a.dmg += e.dmg; a.kills += e.kills; }
+        for (const [k, v] of Object.entries(R.combos)) sum.combos[k] = (sum.combos[k] || 0) + v;
+        for (const k of R.fired) sum.fired.add(k);
+      }
+    } finally {
+      RD.G = keep.G; RD.sfx = keep.sfx; RD.onEvent = keep.ev; RD.onRaidEnd = keep.end;
+      for (const k in keep.n) FX[k].length = keep.n[k];
+      FX.shake = keep.shake;
+    }
+    let top = 0;
+    for (const v of heat) top = Math.max(top, v);
+    if (top) for (let i = 0; i < heat.length; i++) heat[i] /= top;
+    const pieces = Object.entries(sum.dealt).map(([key, e]) => {
+      const tile = key.startsWith('it:') ? +key.slice(3) : null, it = tile != null ? G.items.get(tile) : null;
+      return { key, tile, type: it ? it.type : 'power:' + key.slice(6), name: it ? RD.ITEMS[it.type].name : 'Raised skeletons', dmg: Math.round(e.dmg / runs), kills: e.kills / runs };
+    }).sort((a, b) => b.dmg - a.dmg);
+    const busy = new Set([...Object.keys(sum.dealt), ...sum.fired]);
+    const idle = [...G.items.values()].filter((it) => FIGHTERS.has(RD.ITEMS[it.type].kind) && !busy.has('it:' + it.tile)).map((it) => it.tile);
+    return { runs, night: G.raid, sig: RD.buildSig(G), party: G.party.length, killed: sum.killed / runs, escaped: sum.escaped / runs, gold: sum.gold / runs, range: sum.range, healed: sum.healed / runs, heat, pieces, idle, combos: sum.combos };
+  };
 
   RD.nextNight = function (G) {
     G.raid++;

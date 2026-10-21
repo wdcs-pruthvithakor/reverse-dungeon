@@ -74,6 +74,32 @@ function raidAt(night) {
   return g;
 }
 const route = (g) => { const { prev } = RD.dijkstra(g, g.entrance, (j) => (g.tiles[j] ? 1 : Infinity)); const p = []; for (let s = g.hoard; s >= 0 && s !== g.entrance; s = prev[s]) p.push(s); return p.reverse(); };
+// ---- the night report, scrying and combos
+{
+  const g = RD.newGame(77, 'normal');
+  g.raid = 12; g.malice = 1e5; RD.beginBuild(g, false);
+  const r = route(g).filter((t) => !RD.isGate(g, t) && !RD.isStairs(g, t) && t !== g.hoard);
+  // a Bear Trap in a Dart Slit's line, a skeleton, and one spike pit nobody will walk over
+  let pair = 0;
+  for (let i = 2; i < r.length - 2 && pair < 2; i += 3) { const t = r[i]; if (RD.check(g, 'snare', t)) continue; const w = RD.nb(t).find((x) => g.tiles[x] === 0 && !RD.check(g, 'darts', x)); if (w == null) continue; RD.apply(g, 'snare', t); RD.apply(g, 'darts', w); pair++; }
+  RD.apply(g, 'skeleton', r.slice(-6).find((t) => !RD.check(g, 'skeleton', t)));
+  // a pocket dug out of solid rock: nobody can reach it, so its spike pit stays idle
+  const off = [...g.tiles.keys()].find((j) => RD.fl(j) === 0 && g.tiles[j] === 0 && !RD.isBorder(j) && RD.nb(j).every((x) => g.tiles[x] === 0) && !RD.check(g, 'dig', j));
+  if (off != null) { RD.apply(g, 'dig', off); RD.apply(g, 'spikes', off); }
+  const before = JSON.stringify(RD.saveGame(g)), fxBefore = RD.FX.floaters.length;
+  const fc = RD.forecast(g, 2);
+  ok('scrying leaves the real dungeon untouched', JSON.stringify(RD.saveGame(g)) === before && RD.G === g && g.phase === 'build' && RD.FX.floaters.length === fxBefore);
+  ok('scrying predicts kills, footprints and the pieces that matter', fc.killed + fc.escaped > 0 && fc.heat.some((v) => v > 0) && fc.pieces.length > 0 && fc.sig === RD.buildSig(g));
+  RD.apply(g, 'goblin', r.find((t) => !RD.check(g, 'goblin', t)));
+  ok('a change to the build makes the scry stale', fc.sig !== RD.buildSig(g));
+  RD.startRaid(g);
+  for (let k = 0; k < 20000 && g.phase === 'raid'; k++) RD.step(g, 1 / 30);
+  const rep = g.debrief.report;
+  ok('the night report credits pieces with damage and kills', rep.pieces.length > 0 && rep.total > 0 && rep.pieces.reduce((a, p) => a + p.kills, 0) <= g.debrief.killed.length);
+  ok('pieces that never touched a hero are listed as idle', off == null || rep.idle.includes(off));
+  ok('a Bear Trap in a Dart Slit’s line lands Skewered', pair === 0 || (rep.combos.skewer || 0) > 0);
+  ok('the report suggests at most three fixes', rep.tips.length <= 3 && rep.tips.every((t) => t.text.length > 20));
+}
 // ---- selling never pays more than buying, whatever the discount
 {
   const g = RD.newGame(13, 'normal', 'campaign', 'wyrm', { twists: ['thrones', 'cheap'] });

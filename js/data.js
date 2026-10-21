@@ -342,6 +342,15 @@
   RD.BAL = { monHp: 1.55, monDmg: 1.25, trapDmg: 1.3, theft: 1 };
   // Anti-stacking rules. None of them changes what a single piece does; they stop pieces chaining.
   // They are switches so tools/fortress.js can compare a build with and without them.
+  // Combos: one thing catches a hero, the next hits harder. Checked in this order; the first that fits counts.
+  RD.COMBOS = {
+    skewer: { name: 'Skewered', mult: 1.5, desc: 'A trap or wall piece hits a hero who is pinned or caged: +50% damage.', hint: 'Pin a hero with a Bear Trap, Iron Cage or Gravity Well where a Dart Slit, Storm Pylon or a blast (Fire Rune, Frost Sigil) can reach them.' },
+    shatter: { name: 'Shatter', mult: 2, types: ['crusher', 'boulder', 'chasm', 'spikes'], desc: 'A crushing trap (Crusher, Rolling Boulder, False Floor or Spike Pit) hits a slowed hero: double damage.', hint: 'Slow them first (Frost Sigil, Gravity Well, slimes, spiders), then crush.' },
+    kindling: { name: 'Kindling', mult: 1.3, desc: 'Fire hits a hero who is poisoned or standing in gas: +30%, and the blast scorches everyone within 1.2 tiles for a third of it.', hint: 'Gas or poison first (Miasma Vent, Poison Needle), then fire: a Fire Rune, an imp, a dragon or a chimera.' },
+    ambush: { name: 'Ambush', mult: 1.5, desc: 'A monster hits a dazed hero: +50% damage.', hint: 'A Wandering Rune makes heroes lose their way. Have something waiting.' },
+    pileon: { name: 'Pile-on', mult: 1.4, desc: 'A monster hits a hero who is knocked down or stunned: +40% damage.', hint: 'Knock them down (False Floor, Crusher, Tremor, a minotaur charge, a basilisk’s gaze) where monsters can reach.' },
+    panic: { name: 'Panic', mult: 1.25, desc: 'A monster hits a terrified hero: +25% damage.', hint: 'Terrify them (a dullahan, or the Dread Whisper power) and chase.' },
+  };
   RD.SOUL_MEND = 0.8; // a hero healed back above this share of their health can be siphoned again
   RD.RULES = { dazeRecovery: true, soulOnce: true, pylonSight: true, pylonSpacing: true, pylonJam: true };
   RD.PYLON_GAP = 4; // storm pylons need this many tiles between them; measured with tools/fortress.js
@@ -533,6 +542,7 @@
     perfect: ['Not a single survivor. The guild learns nothing.', 'Flawless. They walked in as heroes and stayed as decor.'],
     robbed: ['They took {g} gold. I want it back with interest.', 'My hoard is lighter. My mood is darker.'],
     thin: ['The hoard is getting thin, keeper. Very thin.'],
+    combo: ['{c}! Beautiful.', 'Now THAT is craftsmanship.', '{c}. I felt that one.', 'Did you see that? {c}!'],
     power: {
       tremor: ['Feel that?'], douse: ['Lights out.'], mire: ['Stay a while.'], lure: ['Ooh, shiny.'], collapse: ['Mind your heads.'],
       rearm: ['Wake up, my lovelies.'], frenzy: ['Feed!'], mend: ['Up you get.'], raise: ['Rise. You have work to do.'],

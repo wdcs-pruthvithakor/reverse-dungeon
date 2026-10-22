@@ -156,6 +156,14 @@ Monsters guard their posts, but run down anyone fleeing or carrying gold (fast m
 
 To submit, upload `index.html`, `css/`, `js/` and `fonts/`. When submitting on CrazyGames, enable "Progress Save → Data Module".
 
+## Phones
+
+Held sideways, the game is tuned for touch (tested at 667×375, 740×360 and 844×390); held upright it asks you to turn the phone.
+- **Big tiles.** On a small screen the map starts zoomed in until tiles are about 28 px, a fingertip, and scrolls with one finger. It opens on the hoard, follows the leading hero during a raid, and the tutorial and "Show me" scroll to the tile they mean. Using the zoom buttons or a pinch hands the zoom back to you.
+- **Two taps to build, one to fire.** The first tap on the map previews and says what the second will do ("Tap again to place the Spike Pit (14 malice)") or why it can't. Raid powers fire on the first tap once chosen, since heroes move between taps. The Info tool opens details on one tap.
+- **Room for the map.** The tutorial is a slim banner, the piece panel shows a one-line summary (full numbers via Full details or Info), the dispatch card and the dungeon's voice share the top of the map side by side, raid powers scroll in one row, and every dialog fits the screen width and scrolls. During a raid, when nothing can be built, the blueprint panel steps aside and the map takes the full width.
+- **Late game stays readable.** Checked on a night-101 Saga dungeon with 229 pieces on 6 floors: floor tabs scroll in the top row, several quick hits on one hero add up into one number instead of a pile, and the rating tops out at EX+. A raid costs about 0.5 ms per simulation step and 2–6 ms per frame to draw on a desktop.
+
 ## Saving
 
 The game saves itself (in the portal's data module when there is one, else `localStorage`) at the start of every night and after every build action. There are **three save slots**, each holding its own dungeon. The start screen lists them with mode, difficulty, night, gold, floors and when each was last played: **Continue** one, **Delete** one (it asks twice), or click a slot to choose where the next new dungeon goes (the note under Play says whether it fills an empty slot or replaces one). The slot you last played is remembered. A save from before slots existed becomes slot 1. A refresh during a raid replays that night from where you left your build. A refresh during the dawn report continues with the next night. Saves from before ranks and floors existed are migrated: pieces keep their upgrades as levels, and tonight's party is hired again with ranks.

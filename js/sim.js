@@ -9,7 +9,15 @@
   // Every effect remembers its floor so the map only draws what happens on the floor you are looking at.
   const FX = (RD.FX = { floaters: [], parts: [], shots: [], rings: [], bubbles: [], shake: 0 });
   let fxFloor = 0;
-  RD.floater = (x, y, text, color, big, f) => FX.floaters.push({ x, y, text, color, t: 0, life: big ? 1.6 : 1.1, big, f: f == null ? fxFloor : f });
+  RD.floater = (x, y, text, color, big, f) => {
+    f = f == null ? fxFloor : f;
+    // a quick run of hits on one spot adds up into one number instead of a pile of them
+    if (!big && /^\d+$/.test(text)) {
+      const same = FX.floaters.find((o) => !o.big && o.f === f && o.color === color && o.t < 0.35 && /^\d+$/.test(o.text) && Math.abs(o.x - x) < 0.5 && Math.abs(o.y - y) < 0.6);
+      if (same) { same.text = String(+same.text + +text); same.t = Math.min(same.t, 0.1); return; }
+    }
+    FX.floaters.push({ x, y, text, color, t: 0, life: big ? 1.6 : 1.1, big, f });
+  };
   RD.burst = (x, y, color, n, spd, f) => {
     for (let k = 0; k < n; k++) {
       const a = Math.random() * Math.PI * 2, v = (0.5 + Math.random()) * (spd || 2);

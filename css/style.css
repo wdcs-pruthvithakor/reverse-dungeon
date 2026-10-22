@@ -956,3 +956,56 @@ kbd {
 .slot .acts { display: flex; gap: 6px; font-family: inherit; }
 .slot .ghost.small, .slot .go.small { margin-top: 0; }
 .slot .ghost.small.armed { border-color: var(--malice); color: var(--malice-hi); }
+
+/* ------------------------------------------------------------ phones held sideways */
+@media (max-height: 500px) {
+  /* the tutorial is a slim banner along the top, not a box over the map */
+  .coach { top: 4px; left: 4px; right: 4px; transform: none; width: auto; padding: 5px 8px; font-size: var(--s-xs); display: flex; gap: 8px; align-items: center; }
+  .coach p { margin: 0; flex: 1; line-height: 1.3; }
+  .coach .ghost.small { padding: 2px 6px; white-space: nowrap; }
+  /* the piece panel: name, price and a line of description; the full numbers are one tap away (Full details / Info) */
+  .detail { font-size: var(--s-xs); max-height: 64px; overflow: hidden; position: relative; }
+  .detail .st, .detail .foot { display: none; }
+  .detail #piece-more { position: absolute; right: 0; bottom: 0; margin: 0; padding: 1px 6px; font-size: 0.65rem; background: var(--slab); }
+  .blueprints .scroll > h3:first-child { margin-top: 0; }
+  .tools .tool { min-height: 38px; }
+  .card { min-height: 38px; }
+  .dispatch { width: min(300px, calc(100% - 12px)); right: 6px; top: 6px; padding: 6px 8px; }
+  .dispatch li small { display: none; }
+  .zoom button { width: 34px; height: 34px; }
+  .toast { bottom: 8px; font-size: var(--s-xs); padding: 4px 10px; }
+}
+@media (max-height: 500px) {
+  .voice { max-width: calc(48% - 10px); }
+  .dispatch { width: 50%; max-width: 300px; max-height: calc(100% - 16px); }
+  .dispatch .note { display: none; }
+  .dispatch ul { margin-top: 4px; gap: 3px; }
+  .dispatch header .eyebrow { font-size: 0.6rem; }
+}
+
+/* the sheet never grows past the screen: a long row inside (the guide's tabs) scrolls instead of pushing it */
+.modal { grid-template-columns: minmax(0, 1fr); }
+.sheet { min-width: 0; max-width: 100%; justify-self: center; }
+@media (max-height: 500px) {
+  .modal { padding: 6px; }
+  .sheet { padding: 10px 12px; }
+  .sheet h2 { font-size: 1.6rem; margin: 0 0 4px; }
+  .guide-body { max-height: calc(100vh - 150px); }
+  .lessons { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .lesson p { font-size: var(--s-xs); }
+}
+
+/* the rotate prompt shows what to do */
+.rotate .phone { display: block; width: 38px; height: 64px; margin: 0 auto 18px; border: 3px solid var(--gold); border-radius: 7px; position: relative; animation: turn 2.4s ease-in-out infinite; }
+.rotate .phone::after { content: ''; position: absolute; left: 50%; bottom: 4px; width: 8px; height: 3px; margin-left: -4px; background: var(--gold); border-radius: 2px; }
+.rotate p { margin: 0; }
+.rotate .note { margin-top: 8px; }
+@keyframes turn { 0%, 25% { transform: rotate(0); } 55%, 100% { transform: rotate(-90deg); } }
+/* small screens: nothing can be built during a raid, so the map takes the blueprint panel's room */
+@media (max-width: 900px), (max-height: 560px) {
+  .app.raiding .layout { grid-template-columns: minmax(0, 1fr); }
+  .app.raiding .blueprints { display: none; }
+}
+@media (max-height: 500px) {
+  .voice { max-width: min(240px, calc(40% - 10px)); opacity: 0.92; }
+}

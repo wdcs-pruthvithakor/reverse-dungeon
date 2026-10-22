@@ -455,7 +455,7 @@
     $('st-raid').parentNode.title = `${RD.modeOf(G).name} · ${RD.DIFF[G.diff].name}${G.pact ? ' · ' + RD.PACTS[G.pact].name : ''}`;
     setStat('st-gold', String(G.gold));
     setStat('st-malice', String(G.malice));
-    const t = Math.round(G.guild.threat);
+    const t = Math.max(0, Math.min(RD.MAX_TIER, Math.round(G.guild.threat))); // threat can climb past EX late in a run
     setStat('st-rating', RD.TIERS[t] + (G.guild.renown > 0.005 ? '+' : ''), RD.TIER_COLOR[t]);
     $('st-rating').parentNode.title = `What the guild thinks your dungeon is worth.${G.guild.renown > 0.005 ? ` Renown +${Math.round(G.guild.renown * 100)}%: every night they fail to take gold, they train harder.` : ''}`;
     setStat('st-known', Math.round(RD.coverage(G, G.guild.K) * 100) + '%');
@@ -471,6 +471,7 @@
     $('build-actions').hidden = raid;
     $('raid-actions').hidden = !raid;
     $('blueprints').classList.toggle('locked', G.phase !== 'build');
+    $('app').classList.toggle('raiding', raid);
     if (raid) renderPowers();
     renderForecast();
     renderUndo();
@@ -551,7 +552,7 @@
           ui.power = null;
         } else {
           ui.power = ui.power === k ? null : k;
-          if (ui.power) toast(`${p.name}: pick a tile on the map.`, true);
+          if (ui.power) toast(`${p.name}: ${ui.touch ? 'tap' : 'click'} a tile on the map.`, true);
         }
         ui.armed = -1;
         renderPowers();
@@ -658,6 +659,7 @@
     const res = RD.apply(G, ui.tool, i);
     if (res.err) return toast(res.err);
     pushUndo(snap);
+    if (ui.touch && /^Tap again/.test($('toast').textContent)) $('toast').className = 'toast'; // the "tap again" hint has done its job
     if (res.map) RD.view.dirty = true;
     sfx(res.map ? 'dig' : res.lv ? 'level' : res.gained ? 'sell' : 'place');
     if (RD.ITEMS[ui.tool]) tutorial('placed', RD.ITEMS[ui.tool]);
@@ -670,6 +672,17 @@
     afterBuild();
     ui.hoverIt = null;
     preview(RD.view.hover);
+  }
+
+  // what a second tap on a tile will do, in words
+  function tapVerb(i) {
+    const t = ui.tool, it = G.items.get(i);
+    if (RD.ITEMS[t]) return `place the ${RD.ITEMS[t].name} (${RD.costOf(G, t)} malice)`;
+    if (t === 'move') return ui.carry != null ? 'set it down here' : 'pick this up';
+    if (t === 'upgrade') return it ? `level up the ${RD.ITEMS[it.type].name} (${RD.levelCost(it)} malice)` : 'level up';
+    if (t === 'sell') return it ? `sell the ${RD.ITEMS[it.type].name} for ${RD.refund(it)} malice` : 'sell';
+    if (t === 'inspect') return 'see its details';
+    return { dig: `dig here (${RD.costOf(G, 'dig')} malice)`, fill: `fill this in (${RD.costOf(G, 'fill')} malice)`, hoard: `move the hoard here (${RD.costOf(G, 'hoard')} malice)` }[t] || 'confirm';
   }
 
   // during a raid: the hero or monster nearest the click, else the piece on that tile
@@ -817,6 +830,7 @@
     if (top > was && G.raid > 1) msgs.push(`${RD.TIERS[top]}-rank blueprints unlocked`);
     if (G.floors < RD.maxFloors(G) && RD.floorNight(G, G.floors) === G.raid) msgs.push(`floor ${RD.ROMAN[G.floors]} can be dug`);
     if (msgs.length) toast(msgs.join(' · '), true);
+    setTimeout(() => centerOn(G.hoard), 30);
     P.context({ night: G.raid, difficulty: G.diff, mode: G.mode });
     showDispatch();
     const d = G.history[0];
@@ -1125,6 +1139,7 @@
     const tile = d.tile ? d.tile() : null;
     if (tile != null && tile >= 0) {
       if (RD.fl(tile) !== RD.view.floor) setFloor(RD.fl(tile), G.phase === 'raid');
+      setTimeout(() => centerOn(tile, true), 30);
       if (!ui.tut) {
         RD.view.marks = [tile];
         clearTimeout(ui.markTimer);
@@ -1464,7 +1479,7 @@
         <div><dt>Escaped</dt><dd style="color:var(--steel)">${d.escaped.length}</dd></div>
         <div><dt>Gold lost</dt><dd style="color:var(--gold)">${d.goldLost}</dd></div>
         <div><dt>Malice earned</dt><dd style="color:var(--malice-hi)">${d.malice + d.income}</dd></div>
-        ${over ? '' : `<div><dt>Next rating</dt><dd style="color:${RD.TIER_COLOR[Math.round(a.threat)]}">${RD.rating(a.threat)}</dd></div>`}
+        ${over ? '' : `<div><dt>Next rating</dt><dd style="color:${RD.TIER_COLOR[Math.max(0, Math.min(RD.MAX_TIER, Math.round(a.threat)))]}">${RD.rating(a.threat)}</dd></div>`}
       </dl>
       <div class="cols">
         <div><h3>Slain</h3><ul class="names">${names(d.killed, 'k')}</ul></div>
@@ -1653,7 +1668,8 @@
       selectTool('spikes');
       const r = routeTiles();
       const spot = r.slice(Math.floor(r.length * 0.3)).find((t) => !RD.check(G, 'spikes', t));
-      coach('You are the dungeon. Heroes come in at the bright <b>gate</b> to steal your <b>gold</b>. Click the glowing tile to put a Spike Pit in their way.', [G.entrance, G.hoard, spot].filter((t) => t != null));
+      coach('You are the dungeon. Heroes come in at the bright <b>gate</b> to steal your <b>gold</b>. Tap the glowing tile to put a Spike Pit in their way.', [G.entrance, G.hoard, spot].filter((t) => t != null));
+      setTimeout(() => centerOn(spot), 60);
       return;
     }
     if (!ui.tut) return;
@@ -1662,7 +1678,8 @@
       selectTool('skeleton');
       const r = routeTiles();
       const spot = r.slice().reverse().slice(1, 6).find((t) => !RD.check(G, 'skeleton', t));
-      coach('Now a <b>Skeleton</b> to guard the gold. Click the glowing tile.', [spot, G.hoard].filter((t) => t != null));
+      coach('Now a <b>Skeleton</b> to guard the gold. Tap the glowing tile.', [spot, G.hoard].filter((t) => t != null));
+      centerOn(spot, true);
     } else if (ev === 'placed' && ui.tut === 2 && d.kind === 'monster') {
       ui.tut = 3;
       coach('Ready. Press <b>Open the gate</b>. Kill them all and the guild learns nothing.', []);
@@ -1747,20 +1764,41 @@
     RD.FX.floaters.length = RD.FX.parts.length = RD.FX.bubbles.length = 0;
     fit();
     renderAll();
+    setTimeout(() => { if (!ui.tut) centerOn(G.hoard); }, 50); // small screens open on the gold
   }
 
   // the map fills whatever room the board area has, times the zoom
   const ZOOMS = [1, 1.5, 2, 2.75];
+  // Phones: tiles are made big enough for a finger (TAP_T px) by starting zoomed in, and the board scrolls.
+  // Using the zoom buttons or a pinch hands the zoom back to the player.
+  const TAP_T = 28;
   function fit() {
     const wrap = $('board-wrap');
+    const W = Math.max(160, wrap.clientWidth - 10), H = Math.max(100, wrap.clientHeight - 10);
+    if (ui.autoZoom !== false) {
+      const base = Math.min((W - 14) / RD.COLS, (H - 14) / RD.ROWS);
+      let k = 0;
+      while (k < ZOOMS.length - 1 && base * ZOOMS[k] < TAP_T) k++;
+      ui.zoom = k;
+    }
     const z = ZOOMS[ui.zoom || 0];
-    RD.resize(Math.max(200, wrap.clientWidth - 10) * z, Math.max(140, wrap.clientHeight - 10) * z);
-    wrap.classList.toggle('zoomed', z > 1);
+    RD.resize(W * z, H * z);
+    // the map scrolls whenever it is bigger than its box, zoomed or not
+    wrap.classList.toggle('zoomed', z > 1 || RD.view.w > W + 10 || RD.view.h > H + 10);
     $('zoom-out').disabled = !ui.zoom;
     $('zoom-in').disabled = ui.zoom >= ZOOMS.length - 1;
   }
+  // bring a tile to the middle of the board (when the map is bigger than the board)
+  function centerOn(tile, smooth) {
+    if (tile == null || tile < 0 || !$('board-wrap').classList.contains('zoomed')) return;
+    if (RD.fl(tile) !== RD.view.floor) setFloor(RD.fl(tile));
+    const sc = $('board-scroll'), T = RD.view.T, M = RD.view.M, [x, y] = RD.xy(tile);
+    const k = sc.scrollWidth / RD.view.w;
+    sc.scrollTo({ left: (M + x * T + T / 2) * k - sc.clientWidth / 2, top: (M + y * T + T / 2) * k - sc.clientHeight / 2, behavior: smooth ? 'smooth' : 'auto' });
+  }
   // zoom in or out, keeping the same point of the map under the middle of the board
   function setZoom(z, fx, fy) {
+    ui.autoZoom = false;
     z = Math.max(0, Math.min(ZOOMS.length - 1, z));
     if (z === (ui.zoom || 0)) return;
     const sc = $('board-scroll');
@@ -1773,7 +1811,7 @@
   }
   // while zoomed during a raid, keep the leading hero on screen
   function cameraFollow() {
-    if (!ui.zoom || !G.R || !ui.follow) return;
+    if (!$('board-wrap').classList.contains('zoomed') || !G.R || !ui.follow) return;
     const live = G.R.heroes.filter((h) => RD.heroAlive(h) && RD.fl(h.tile) === RD.view.floor);
     if (!live.length) return;
     const lead = live.reduce((a, h) => (RD.tdist(h.tile, G.entrance) > RD.tdist(a.tile, G.entrance) ? h : a), live[0]);
@@ -1803,17 +1841,21 @@
       if (ui.hoverIt) { ui.hoverIt = null; renderDetail(); }
       if (G && G.phase === 'build') $('hint').textContent = 'Pick a blueprint, then click the map.';
     });
-    cv.addEventListener('pointerdown', (e) => { ui.touch = e.pointerType !== 'mouse'; });
+    // touch or mouse: decided by whatever pressed last, anywhere on the page
+    document.addEventListener('pointerdown', (e) => { ui.touch = e.pointerType !== 'mouse'; }, { capture: true, passive: true });
     // touch: the first tap shows what would happen (details, range, outline), the second tap does it
     cv.addEventListener('click', (e) => {
       const i = canvasTile(e);
-      const aiming = G.phase === 'build' || (G.phase === 'raid' && !!ui.power);
+      // building asks for a second tap; a raid power fires on the first (choosing the power was the first tap,
+      // and heroes move between taps)
+      const aiming = G.phase === 'build' && ui.tool !== 'inspect';
       if (ui.touch && aiming && i >= 0 && ui.armed !== i) {
         ui.armed = i;
         RD.view.hover = i;
         ui.hoverIt = null;
         preview(i);
         if (G.phase === 'raid') toast(`Tap again to use ${RD.POWERS[ui.power].name} here.`, true);
+        else toast(ui.previewError ? ui.previewError : `Tap again to ${tapVerb(i)}.`, !ui.previewError);
         return;
       }
       ui.armed = -1;

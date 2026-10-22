@@ -1009,3 +1009,56 @@ kbd {
 @media (max-height: 500px) {
   .voice { max-width: min(240px, calc(40% - 10px)); opacity: 0.92; }
 }
+
+/* ------------------------------------------------------------ full screen (focus mode) */
+#drawer-btn, .toolchip { display: none; }
+.app.focus .logo,
+.app.focus .stats .rating,
+.app.focus .stats .steel,
+.app.focus #guide-btn,
+.app.focus #ledger-btn,
+.app.focus #sound-btn,
+.app.focus .omen span,
+.app.focus .omen .twist,
+.app.focus .omen .tag,
+.app.focus .stagebar > .seg,
+.app.focus #layouts,
+.app.focus #scry,
+.app.focus .build-actions .hint { display: none; }
+.app.focus .layout { grid-template-columns: minmax(0, 1fr); }
+.app.focus #drawer-btn { display: inline-block; }
+.app.focus .build-actions { justify-content: flex-end; flex-wrap: nowrap; }
+/* the blueprints slide in from the left, over the map */
+.app.focus .blueprints {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(250px, 72vw);
+  z-index: 9;
+  transform: translateX(-105%);
+  transition: transform 0.2s ease-out;
+  box-shadow: 20px 0 40px rgba(0, 0, 0, 0.5);
+}
+.app.focus.drawer .blueprints { transform: none; }
+.app.focus.raiding .blueprints { display: none; }
+/* what you're placing, on the map; tap it to change */
+.app.focus .toolchip:not([hidden]) {
+  display: inline-flex;
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 3;
+  align-items: center;
+  gap: 6px;
+  background: rgba(13, 11, 16, 0.92);
+  border: 1px solid var(--gold);
+  color: var(--bone);
+  font-size: var(--s-xs);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.toolchip .m { color: var(--malice-hi); font-family: var(--f-mono); }
+.toolchip .chg { color: var(--gold); text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.6rem; }
+.app.focus .stats > div { padding: 1px 6px 2px; }
+.app.focus .ledger { display: none; }

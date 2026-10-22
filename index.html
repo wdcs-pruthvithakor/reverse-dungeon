@@ -7,8 +7,8 @@
 <meta name="description" content="A dungeon-builder where you play the dungeon. Heroes learn your traps and tell the guild, so you rebuild between raids.">
 <meta name="theme-color" content="#0d0b10">
 <link rel="preload" href="fonts/AlegreyaSans-400.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="fonts/fonts.css?v=55">
-<link rel="stylesheet" href="css/style.css?v=55">
+<link rel="stylesheet" href="fonts/fonts.css?v=58">
+<link rel="stylesheet" href="css/style.css?v=58">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0b10'/%3E%3Cpath d='M6 28V12a10 10 0 0 1 20 0v16' fill='none' stroke='%23c43c68' stroke-width='3'/%3E%3Ccircle cx='16' cy='21' r='3' fill='%23e3b04b'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -28,6 +28,7 @@
       <button type="button" class="icon-btn" id="ledger-btn" aria-controls="ledger" aria-expanded="false" title="The Guild Ledger">Ledger</button>
       <button type="button" class="icon-btn" id="sound-btn" aria-pressed="true" title="Sound on or off">Sound</button>
       <button type="button" class="icon-btn" id="menu" title="New dungeon or resume">Menu</button>
+      <button type="button" class="icon-btn" id="focus-btn" aria-pressed="false" title="Full screen: hide everything but the map and the controls you need">Full screen</button>
     </div>
   </header>
 
@@ -59,6 +60,7 @@
           <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
         </div>
         <div class="toast" id="toast" role="status" aria-live="polite"></div>
+        <button type="button" class="toolchip" id="toolchip" hidden></button>
         <div class="voice" id="voice" aria-live="polite"><span class="core" aria-hidden="true"></span><p><b>The Core</b><span id="voice-text"></span></p></div>
         <section class="forecast" id="forecast" hidden aria-labelledby="forecast-title">
           <header><div><span class="eyebrow">Scrying</span><b id="forecast-title"></b></div><button type="button" class="ghost small" id="forecast-close">Hide</button></header>
@@ -78,6 +80,7 @@
         <div class="build-actions" id="build-actions">
           <p class="hint" id="hint">Pick a blueprint, then click the map.</p>
           <button type="button" class="ghost" id="cancel" hidden>Cancel</button>
+          <button type="button" class="ghost" id="drawer-btn" aria-controls="blueprints" aria-expanded="false">Build</button>
           <button type="button" class="ghost" id="undo" title="Undo the last build action (Ctrl+Z). Everything can be undone until the gate opens." disabled>Undo</button>
           <button type="button" class="ghost" id="layouts" title="Save this floor's layout, or rebuild a saved one paying only for what differs">Layouts</button>
           <button type="button" class="ghost" id="scry" title="Rehearse tonight's raid against your dungeon as it stands: where the heroes will walk, how many should fall, which pieces will do the work">Scry the raid <span class="m" id="scry-cost"></span></button>
@@ -124,13 +127,13 @@
   <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"></div>
 </div>
 
-<script src="js/data.js?v=55"></script>
-<script src="js/world.js?v=55"></script>
-<script src="js/sim.js?v=55"></script>
-<script src="js/render.js?v=55"></script>
-<script src="js/audio.js?v=55"></script>
-<script src="js/portal.js?v=55"></script>
-<script src="js/howto.js?v=55"></script>
-<script src="js/ui.js?v=55"></script>
+<script src="js/data.js?v=58"></script>
+<script src="js/world.js?v=58"></script>
+<script src="js/sim.js?v=58"></script>
+<script src="js/render.js?v=58"></script>
+<script src="js/audio.js?v=58"></script>
+<script src="js/portal.js?v=58"></script>
+<script src="js/howto.js?v=58"></script>
+<script src="js/ui.js?v=58"></script>
 </body>
 </html>

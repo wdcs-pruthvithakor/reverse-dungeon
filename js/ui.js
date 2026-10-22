@@ -140,6 +140,42 @@
     ui.tool = t;
     ui.carry = null;
     renderBlueprints();
+    // full screen: the drawer closes once you've picked, so the next tap can go on the map
+    if (ui.focus && ui.drawer) setDrawer(false);
+    renderToolChip();
+  }
+
+  // ---------------------------------------------------------------- full screen (focus mode)
+  // The browser's own full screen where it is allowed, plus a stripped layout: the map, the stats that matter,
+  // and the blueprints in a drawer.
+  function setFocus(on) {
+    ui.focus = on;
+    $('app').classList.toggle('focus', on);
+    $('focus-btn').setAttribute('aria-pressed', on);
+    $('focus-btn').textContent = on ? 'Exit full screen' : 'Full screen';
+    store.set('focus', on);
+    setDrawer(false);
+    const el = document.documentElement;
+    try {
+      if (on && !document.fullscreenElement && el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      if (!on && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    } catch (e) { /* not allowed here (iPhone, some portals): the stripped layout still applies */ }
+    renderToolChip();
+    setTimeout(fit, 60);
+  }
+  function setDrawer(open) {
+    ui.drawer = open;
+    $('app').classList.toggle('drawer', open);
+    $('drawer-btn').setAttribute('aria-expanded', open);
+  }
+  // what you're about to place, on the map, so the drawer can stay shut
+  function renderToolChip() {
+    const c = $('toolchip');
+    if (!ui.focus || !G || G.phase !== 'build') { c.hidden = true; return; }
+    const d = RD.ITEMS[ui.tool], T2 = RD.TOOLS[ui.tool];
+    const cost = RD.costOf(G, ui.tool);
+    c.innerHTML = `${d ? tierTag(d.tier) + ' ' : ''}${esc(d ? d.name : T2 ? T2.name : '')}${cost ? ` · <span class="m">${cost}</span>` : ''} <span class="chg">change</span>`;
+    c.hidden = false;
   }
 
   function card(type, sale, locked) {
@@ -475,6 +511,7 @@
     if (raid) renderPowers();
     renderForecast();
     renderUndo();
+    renderToolChip();
   }
 
   // ---------------------------------------------------------------- scrying
@@ -1845,6 +1882,7 @@
     document.addEventListener('pointerdown', (e) => { ui.touch = e.pointerType !== 'mouse'; }, { capture: true, passive: true });
     // touch: the first tap shows what would happen (details, range, outline), the second tap does it
     cv.addEventListener('click', (e) => {
+      if (ui.focus && ui.drawer) { setDrawer(false); return; } // a tap beside the open drawer just closes it
       const i = canvasTile(e);
       // building asks for a second tap; a raid power fires on the first (choosing the power was the first tap,
       // and heroes move between taps)
@@ -1896,12 +1934,18 @@
     $('dispatch-close').onclick = hideDispatch;
     $('scry').onclick = scry;
     $('undo').onclick = undo;
+    $('focus-btn').onclick = () => setFocus(!ui.focus);
+    $('drawer-btn').onclick = () => setDrawer(!ui.drawer);
+    $('toolchip').onclick = () => setDrawer(true);
+    // leaving the browser's full screen (back gesture, Esc) leaves the stripped layout too
+    document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && ui.focus && ui.fsWas) setFocus(false); ui.fsWas = !!document.fullscreenElement; });
     $('layouts').onclick = showLayouts;
     $('forecast-close').onclick = () => { $('forecast').hidden = true; ui.showHeat = false; if (!ui.tut) RD.view.marks = []; };
     const soundBtn = $('sound-btn');
     const setSound = (v, keep) => { RD.audio.setOn(v); soundBtn.setAttribute('aria-pressed', v); if (keep) store.set('sound', v); };
     soundBtn.onclick = () => setSound(!RD.audio.isOn(), true);
     setSound(store.get('sound', true) && !P.muted(), false);
+    if (store.get('focus', false)) setTimeout(() => setFocus(true), 0); // the layout comes back; real full screen needs a tap
     P.onMute = (m) => setSound(!m && store.get('sound', true), false);
     // browsers only allow sound after a gesture
     const unlock = () => RD.audio.unlock();

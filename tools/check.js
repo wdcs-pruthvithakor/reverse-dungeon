@@ -74,6 +74,225 @@ function raidAt(night) {
   return g;
 }
 const route = (g) => { const { prev } = RD.dijkstra(g, g.entrance, (j) => (g.tiles[j] ? 1 : Infinity)); const p = []; for (let s = g.hoard; s >= 0 && s !== g.entrance; s = prev[s]) p.push(s); return p.reverse(); };
+{
+  // an Abyss Gate behind a Drop Gate: a hero thrown back out must come through the Drop Gate again
+  const shut = (g, d, e) => { const t = g.tiles.slice(); t[d] = 0; t[e] = 0; return !RD.reachable(g, t, g.entrance, g.hoard); };
+  let g = null, gate = -1, abyss = -1;
+  for (let seed = 1; seed < 200 && abyss < 0; seed++) {
+    g = RD.newGame(seed * 11, 'normal'); g.raid = 22; g.malice = 1e7; g.gold = 1e5; RD.beginBuild(g, false);
+    const r = route(g);
+    let exit = -1;
+    for (const d of r.slice(1)) {
+      if (RD.check(g, 'dropgate', d)) continue;
+      RD.apply(g, 'dropgate', d);
+      exit = [...g.tiles.keys()].find((j) => RD.fl(j) === 0 && g.tiles[j] === 1 && !r.includes(j) && !RD.check(g, 'exitgate', j) && shut(g, d, j)) ?? -1;
+      if (exit >= 0) { gate = d; break; }
+      RD.apply(g, 'sell', d);
+    }
+    if (exit < 0) continue;
+    RD.apply(g, 'exitgate', exit);
+    abyss = r.slice(r.indexOf(gate) + 2).find((t) => !RD.check(g, 'abyss', t)) ?? -1;
+    if (abyss >= 0) RD.apply(g, 'abyss', abyss);
+  }
+  RD.startRaid(g);
+  for (let k = 0; k < 60 && g.R.queue.length; k++) RD.step(g, 1 / 30);
+  const h = g.R.heroes[0];
+  h.hp = h.maxHp = 1e6;
+  const it = g.items.get(gate);
+  it.passed.add(h.id); it.armed = true;
+  const [ax, ay] = RD.xy(abyss);
+  h.state = 'seek'; h.tile = RD.nb(abyss).find((j) => g.tiles[j] === 1); h.x = RD.xy(h.tile)[0] + 0.5; h.y = RD.xy(h.tile)[1] + 0.5; h.next = abyss;
+  for (let k = 0; k < 60 && h.tile !== g.entrance; k++) RD.step(g, 1 / 30);
+  ok('a hero thrown out by the Abyss Gate still counts as through the Drop Gate', h.tile === g.entrance && it.passed.has(h.id));
+}
+{
+  // the Abyss Gate throws heroes coming in back out; it is never a shortcut for heroes going out
+  const g = RD.newGame(77, 'normal'); g.raid = 22; g.malice = 1e6; g.gold = 1e4; RD.beginBuild(g, false);
+  const r = route(g);
+  const t = r.slice(Math.floor(r.length * 0.6)).find((x) => !RD.check(g, 'abyss', x));
+  RD.apply(g, 'abyss', t);
+  RD.startRaid(g);
+  for (let k = 0; k < 60 && g.R.queue.length; k++) RD.step(g, 1 / 30);
+  const h = g.R.heroes[0];
+  for (const o of g.R.heroes) if (o !== h) o.state = 'out';
+  g.R.queue.length = 0;
+  h.hp = h.maxHp = 1e6; h.state = 'escape'; h.carry = 50;
+  const i = r.indexOf(t), [x, y] = RD.xy(r[i + 1]);
+  h.tile = r[i + 1]; h.x = x + 0.5; h.y = y + 0.5; h.next = -1;
+  const t0 = g.R.t;
+  let out = -1;
+  for (let k = 0; k < 30 * 60 && g.phase === 'raid' && out < 0; k++) { RD.step(g, 1 / 30); if (h.state === 'out') out = g.R.t - t0; }
+  ok(`an escaping hero who crosses an Abyss Gate is thrown deeper, not out (${out.toFixed(1)}s to leave)`, out < 0 || out > 3);
+}
+// ---- bait chests, ghosts, mortal monsters and saved layouts
+{
+  // bait: a hero on the way stops for 2 seconds to open it; killing them keeps its gold
+  const g = RD.newGame(77, 'normal'); g.raid = 8; g.malice = 1e5; RD.beginBuild(g, false);
+  const r = route(g).filter((t) => !RD.isGate(g, t) && !RD.isStairs(g, t) && t !== g.hoard);
+  const spot = r.slice(2).find((t) => !RD.check(g, 'bait', t));
+  RD.apply(g, 'bait', spot);
+  RD.startRaid(g);
+  let carrier = null, stood = 0;
+  for (let k = 0; k < 30 * 120 && g.phase === 'raid' && !carrier; k++) {
+    RD.step(g, 1 / 30);
+    if (g.R.heroes.some((h) => h.baitT > 0 && h.tile === spot)) stood++;
+    carrier = g.R.heroes.find((h) => h.bait > 0) || null;
+  }
+  ok('a hero stops to open a bait chest, then carries its gold', !!carrier && stood > 30 && g.items.get(spot).taken);
+  const gold = g.gold;
+  RD.usePower(g, 'tremor', carrier.tile); // any blow will do; then finish them off
+  carrier.hp = 0.5; RD.usePower(g, 'tremor', carrier.tile);
+  ok('a bait carrier who dies takes nothing out', !RD.heroAlive(carrier) ? g.gold >= gold : true);
+}
+{
+  // ghosts: a fallen Chosen Hero always returns; each kind does its job; clerics lay them to rest
+  const g = RD.newGame(4242, 'normal'); g.raid = 22; g.malice = 1e6; g.gold = 1e5; RD.beginBuild(g, false);
+  RD.startRaid(g);
+  for (let k = 0; k < 400 && g.phase === 'raid'; k++) RD.step(g, 1 / 30);
+  const h = g.R.heroes.find((x) => RD.heroAlive(x) && x.tile != null);
+  for (const o of g.R.heroes) if (o !== h && RD.heroAlive(o)) o.state = 'out';
+  g.R.queue.length = 0;
+  h.cls = 'chosen'; h.title = 'the Chosen'; h.hp = 1;
+  RD.usePower(g, 'smite', h.tile);
+  for (let k = 0; k < 60 && g.phase === 'raid'; k++) RD.step(g, 1 / 30);
+  ok('the Chosen Hero who dies in your dungeon comes back as a ghost', g.ghosts.length === 1 && g.ghosts[0].name === h.name && g.debrief.risen.length === 1);
+  const back = RD.loadGame(JSON.parse(JSON.stringify(RD.saveGame((RD.nextNight(g), g)))));
+  ok('ghosts are kept in the save', back.ghosts.length === 1 && back.ghosts[0].fade === g.ghosts[0].fade);
+  g.ghosts[0].kind = 'vengeful';
+  RD.startRaid(g);
+  const sp = g.R.monsters.find((m) => m.type === 'spectre');
+  ok('a vengeful ghost rises as a spectre where it fell', !!sp && sp.tile === g.ghosts[0].tile && sp.tier >= RD.ITEMS.spectre.tier);
+  g.R.queue.length = 0; g.R.heroes.length = 0; RD.step(g, 1 / 30);
+  if (g.phase !== 'build') RD.nextNight(g);
+  g.ghosts[0].kind = 'haunt';
+  RD.startRaid(g);
+  for (let k = 0; k < 120 && g.R.queue.length; k++) RD.step(g, 1 / 30);
+  const near = g.R.heroes.find(RD.heroAlive);
+  const gt = g.ghosts[0].tile, [gx, gy] = RD.xy(gt);
+  near.cls = 'knight'; near.tile = gt; near.x = gx + 0.5; near.y = gy + 0.5; near.next = -1; near.fearT = 0; near.hauntCd = 0;
+  RD.step(g, 1 / 30);
+  ok('a haunting ghost frightens heroes who come close', near.fearT > 0);
+  near.cls = 'cleric'; near.rootT = 99; near.state = 'seek';
+  for (let k = 0; k < 30 * 4; k++) RD.step(g, 1 / 30);
+  ok('a cleric who stands by a ghost lays it to rest', g.ghosts.length === 0 || g.ghosts[0].gone);
+}
+{
+  // whispering: the guild's map picks up a lie
+  const g = RD.newGame(4242, 'normal'); g.raid = 10; RD.beginBuild(g, false);
+  g.ghosts = [{ tile: route(g)[4], name: 'Wren', title: 'the Chosen', cls: 'chosen', tier: 3, kind: 'whisper', night: 9, fade: 30 }];
+  const before = JSON.stringify([...g.guild.K.traps.keys()]);
+  RD.startRaid(g);
+  g.R.queue.length = 0; g.R.heroes.length = 0; RD.step(g, 1 / 30);
+  ok('a whispering ghost corrupts the guild’s map', JSON.stringify([...g.guild.K.traps.keys()]) !== before && g.debrief.rumors.some((x) => /ghost/i.test(x.who)));
+}
+{
+  // Mortal Monsters: a monster that falls is gone at dawn, and there's a cap on how many you keep
+  const g = RD.newGame(77, 'normal', 'campaign', null, { twists: ['mortal'] }); g.raid = 8; g.malice = 1e6; RD.beginBuild(g, false);
+  const r = route(g).filter((t) => !RD.isGate(g, t) && !RD.isStairs(g, t) && t !== g.hoard);
+  const at = r.slice(2).find((t) => !RD.check(g, 'goblin', t));
+  RD.apply(g, 'goblin', at);
+  RD.startRaid(g);
+  g.R.monsters.forEach((m) => { m.hp = m.maxHp = 1; });
+  for (let k = 0; k < 30 * 400 && g.phase === 'raid'; k++) RD.step(g, 1 / 30);
+  ok('Mortal Monsters: a fallen monster is gone for good', !g.items.has(at) && g.debrief.fallen.some((x) => x.tile === at));
+  if (g.phase !== 'over') RD.nextNight(g);
+  g.malice = 1e6;
+  let refused = '';
+  for (const t of [...g.tiles.keys()]) { if (refused) break; const e = RD.check(g, 'goblin', t); if (!e) RD.apply(g, 'goblin', t); else if (/Mortal Monsters/.test(e)) refused = e; }
+  ok(`Mortal Monsters caps how many you keep (${RD.monsterCap(g)})`, !!refused && [...g.items.values()].filter((o) => RD.ITEMS[o.type].kind === 'monster').length === RD.monsterCap(g));
+}
+{
+  // saved layouts: rebuild a floor, paying only for what differs
+  const g = RD.newGame(5, 'normal'); g.raid = 10; g.malice = 3000; RD.beginBuild(g, false);
+  const r = route(g);
+  RD.apply(g, 'spikes', r[3]); RD.apply(g, 'skeleton', r[6]); RD.apply(g, 'upgrade', r[6]); RD.apply(g, 'goblin', r[9]);
+  const L = RD.layoutOf(g, 0), keep = g;
+  RD.apply(g, 'sell', r[3]); RD.apply(g, 'sell', r[6]); RD.apply(g, 'snare', r[3]);
+  const est = RD.layoutCost(g, 0, L);
+  ok('a layout’s cost is worked out without touching the dungeon', RD.G === keep && g.items.has(r[3]) && g.items.get(r[3]).type === 'snare');
+  const res = RD.applyLayout(g, 0, L);
+  const now = RD.layoutOf(g, 0);
+  ok('rebuilding a saved layout restores the floor exactly, at the estimated cost', JSON.stringify(now.items.sort()) === JSON.stringify(L.items.sort()) && res.cost === est.cost);
+}
+// ---- one-way roads: in by the Drop Gate, out by the Exit Gate
+{
+  // a layout where the Drop Gate is the only way in while the exit is shut, so the whole party must come through it
+  const shutHoard = (g, d, e) => { const t = g.tiles.slice(); t[d] = 0; t[e] = 0; return !RD.reachable(g, t, g.entrance, g.hoard); };
+  let g = null, gate = -1, exit = -1, cut = -1, thresholdOk = false;
+  for (let seed = 1; seed < 120 && exit < 0; seed++) {
+    g = RD.newGame(seed * 11, 'normal'); g.raid = 6; g.malice = 1e5; RD.beginBuild(g, false);
+    const r = route(g);
+    const near = RD.nb(g.entrance).find((j) => g.tiles[j] === 1);
+    if (near != null && !/threshold/.test(RD.check(g, 'dropgate', near) || '')) thresholdOk = true;
+    cut = r.slice(1).find((t) => /road out/.test(RD.check(g, 'dropgate', t) || '')) ?? cut;
+    if (seed === 1) ok('an Exit Gate needs a Drop Gate on its floor', /Place a Drop Gate first/.test(RD.check(g, 'exitgate', r[r.length - 2]) || ''));
+    for (const d of r.slice(1)) {
+      if (RD.check(g, 'dropgate', d)) continue;
+      RD.apply(g, 'dropgate', d);
+      const e = [...g.tiles.keys()].find((j) => RD.fl(j) === 0 && g.tiles[j] === 1 && !r.includes(j) && !RD.check(g, 'exitgate', j) && shutHoard(g, d, j));
+      if (e != null) { gate = d; exit = e; break; }
+      RD.apply(g, 'sell', d);
+    }
+  }
+  ok('gates may stand right beside the entrance', thresholdOk);
+  {
+    // a pocket dug into solid rock is out of everyone's reach already; it must not block gates elsewhere
+    const p = RD.newGame(3, 'normal'); p.raid = 6; p.malice = 1e5; RD.beginBuild(p, false);
+    const pocket = [...p.tiles.keys()].find((j) => RD.fl(j) === 0 && p.tiles[j] === 0 && !RD.isBorder(j) && RD.nb(j).every((x) => p.tiles[x] === 0) && !RD.check(p, 'dig', j));
+    const before = route(p).slice(1).filter((t) => !RD.check(p, 'dropgate', t)).length;
+    RD.apply(p, 'dig', pocket);
+    const after = route(p).slice(1).filter((t) => !RD.check(p, 'dropgate', t)).length;
+    ok('an unreachable pocket somewhere doesn’t block gates', before > 0 && after === before);
+  }
+  ok('a Drop Gate can’t stand where it would be the only road out', cut >= 0);
+  ok('an Exit Gate can stand on the other road', exit >= 0);
+  RD.apply(g, 'exitgate', exit);
+  RD.startRaid(g);
+  ok('the Exit Gate starts shut', g.tiles[exit] === 0);
+  let fellWith = -1, worst = 0, early = false;
+  const still = new Map();
+  for (let k = 0; k < 30 * 400 && g.phase === 'raid'; k++) {
+    RD.step(g, 1 / 30);
+    const it = g.items.get(gate);
+    if (it.dropped && fellWith < 0) {
+      fellWith = g.R.heroes.filter((h) => RD.heroAlive(h) && h.state !== 'flee' && h.state !== 'escape' && !it.passed.has(h.id)).length + g.R.queue.length;
+      early = fellWith > 0;
+    }
+    for (const o of g.R.heroes) if (RD.heroAlive(o) && o.tile != null) { const v = still.get(o) || { t: o.tile, n: 0 }; v.n = v.t === o.tile && o.state !== 'loot' && o.stun <= 0 ? v.n + 1 : 0; v.t = o.tile; still.set(o, v); worst = Math.max(worst, v.n); }
+  }
+  ok('the Drop Gate waits for the whole party, then falls', fellWith === 0 && !early);
+  ok('…and the Exit Gate opens when it does', g.R.log.some((l) => /grinds open/.test(l.text)));
+  ok(`heroes leave by the other road (longest standstill ${(worst / 30).toFixed(0)}s, no gate had to reopen)`, worst < 30 * 20 && !g.R.log.some((l) => /creaks back up/.test(l.text)));
+  ok('dawn resets both gates, and the guild remembers gates, not walls', g.tiles[gate] === 1 && g.tiles[exit] === 1 && g.guild.K.tiles[gate] !== 0 && g.guild.K.tiles[exit] !== 0);
+  if (g.phase !== 'over') RD.nextNight(g);
+  ok('selling the last Drop Gate takes its Exit Gates with it', g.phase !== 'build' || (!RD.apply(g, 'sell', gate).err && !g.items.has(exit)));
+}
+// ---- the night report, scrying and combos
+{
+  const g = RD.newGame(77, 'normal');
+  g.raid = 12; g.malice = 1e5; RD.beginBuild(g, false);
+  const r = route(g).filter((t) => !RD.isGate(g, t) && !RD.isStairs(g, t) && t !== g.hoard);
+  // a Bear Trap in a Dart Slit's line, a skeleton, and one spike pit nobody will walk over
+  let pair = 0;
+  for (let i = 2; i < r.length - 2 && pair < 2; i += 3) { const t = r[i]; if (RD.check(g, 'snare', t)) continue; const w = RD.nb(t).find((x) => g.tiles[x] === 0 && !RD.check(g, 'darts', x)); if (w == null) continue; RD.apply(g, 'snare', t); RD.apply(g, 'darts', w); pair++; }
+  RD.apply(g, 'skeleton', r.slice(-6).find((t) => !RD.check(g, 'skeleton', t)));
+  // a pocket dug out of solid rock: nobody can reach it, so its spike pit stays idle
+  const off = [...g.tiles.keys()].find((j) => RD.fl(j) === 0 && g.tiles[j] === 0 && !RD.isBorder(j) && RD.nb(j).every((x) => g.tiles[x] === 0) && !RD.check(g, 'dig', j));
+  if (off != null) { RD.apply(g, 'dig', off); RD.apply(g, 'spikes', off); }
+  const before = JSON.stringify(RD.saveGame(g)), fxBefore = RD.FX.floaters.length;
+  const fc = RD.forecast(g, 2);
+  ok('scrying leaves the real dungeon untouched', JSON.stringify(RD.saveGame(g)) === before && RD.G === g && g.phase === 'build' && RD.FX.floaters.length === fxBefore);
+  ok('scrying predicts kills, footprints and the pieces that matter', fc.killed + fc.escaped > 0 && fc.heat.some((v) => v > 0) && fc.pieces.length > 0 && fc.sig === RD.buildSig(g));
+  RD.apply(g, 'goblin', r.find((t) => !RD.check(g, 'goblin', t)));
+  ok('a change to the build makes the scry stale', fc.sig !== RD.buildSig(g));
+  RD.startRaid(g);
+  for (let k = 0; k < 20000 && g.phase === 'raid'; k++) RD.step(g, 1 / 30);
+  const rep = g.debrief.report;
+  ok('the night report credits pieces with damage and kills', rep.pieces.length > 0 && rep.total > 0 && rep.pieces.reduce((a, p) => a + p.kills, 0) <= g.debrief.killed.length);
+  ok('pieces that never touched a hero are listed as idle', off == null || rep.idle.includes(off));
+  ok('a Bear Trap in a Dart Slit’s line lands Skewered', pair === 0 || (rep.combos.skewer || 0) > 0);
+  ok('the report suggests at most three fixes', rep.tips.length <= 3 && rep.tips.every((t) => t.text.length > 20));
+}
 // ---- selling never pays more than buying, whatever the discount
 {
   const g = RD.newGame(13, 'normal', 'campaign', 'wyrm', { twists: ['thrones', 'cheap'] });
@@ -131,6 +350,8 @@ const route = (g) => { const { prev } = RD.dijkstra(g, g.entrance, (j) => (g.til
   ok('Dread Whisper unnerves heroes', RD.usePower(g, 'dread', v.tile) === null && v.fearT > 0);
   const empty = [...g.tiles.keys()].find((j) => g.tiles[j] === 1 && !g.R.heroes.some((x) => RD.heroAlive(x) && RD.fl(x.tile) === RD.fl(j) && RD.tdist(x.tile, j) < 3));
   ok('Doom Bolt needs a hero under the cursor', typeof RD.usePower(g, 'smite', empty) === 'string');
+  // the aimed powers hit the hero nearest the click, so only v stays in the dungeon for them
+  for (const o of g.R.heroes) if (o !== v) o.state = 'out';
   const hp = v.hp;
   ok('Doom Bolt takes a quarter of a hero’s health', RD.usePower(g, 'smite', v.tile) === null && Math.abs(hp - v.hp - (v.title ? 1e5 / 6 : 2.5e4)) < 1);
   const from = v.tile;

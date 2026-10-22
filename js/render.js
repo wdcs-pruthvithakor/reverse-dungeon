@@ -194,7 +194,9 @@
     c.lineWidth = lw;
     c.lineJoin = 'round';
     c.lineCap = 'round';
-    if (o.alpha != null) c.globalAlpha = o.alpha;
+    // a spectre is a wraith made of someone you killed: paler, and see-through
+    if (type === 'spectre') { type = 'wraith'; c.globalAlpha = (o.alpha != null ? o.alpha : 1) * 0.7; }
+    else if (o.alpha != null) c.globalAlpha = o.alpha;
     const d = RD.ITEMS[type];
     if (d && d.boss) aura(c, s, RD.TIER_COLOR[d.tier], t);
     const eyes = (x, y, r, col) => { c.fillStyle = col; c.beginPath(); c.arc(-x, y, r, 0, Math.PI * 2); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); };
@@ -311,6 +313,35 @@
         break;
       }
       // ------------------------------------------------ obstacles and wall pieces
+      case 'bait': {
+        // a chest of real coin; open and empty once a hero has taken it
+        c.fillStyle = '#5a3d22';
+        rr(c, -s * 0.32, -s * 0.06, s * 0.64, s * 0.34, s * 0.04); c.fill();
+        c.fillStyle = o.off ? '#3a2816' : '#6e4b2a';
+        if (o.off) { c.save(); c.translate(0, -s * 0.06); c.rotate(-0.6); rr(c, -s * 0.32, -s * 0.22, s * 0.64, s * 0.2, s * 0.04); c.fill(); c.restore(); }
+        else { rr(c, -s * 0.32, -s * 0.24, s * 0.64, s * 0.2, s * 0.06); c.fill(); }
+        c.strokeStyle = P.gold; c.lineWidth = lw * 1.2;
+        c.strokeRect(-s * 0.32, -s * 0.06, s * 0.64, s * 0.34);
+        if (!o.off) { c.fillStyle = P.gold; c.beginPath(); c.arc(0, -s * 0.04, s * 0.05, 0, Math.PI * 2); c.fill(); for (const [x, y] of [[-0.14, -0.3], [0.05, -0.34], [0.18, -0.29]]) { c.beginPath(); c.arc(x * s, y * s, s * 0.06, 0, Math.PI * 2); c.fill(); } }
+        break;
+      }
+      case 'dropgate': case 'exitgate': {
+        // a portcullis: raised in the lintel while open, down to the floor while shut.
+        // Drop gates start up and fall (red); exit gates start down and lift (green).
+        const exit = type === 'exitgate';
+        const down = o.closed ? 1 : 0.28;
+        c.fillStyle = '#2a2430';
+        c.fillRect(-s * 0.44, -s * 0.44, s * 0.88, s * 0.14);
+        c.fillRect(-s * 0.44, -s * 0.44, s * 0.1, s * 0.88);
+        c.fillRect(s * 0.34, -s * 0.44, s * 0.1, s * 0.88);
+        c.strokeStyle = exit ? P.venom : o.closed ? P.maliceHi : '#9a8f9c';
+        c.lineWidth = lw * 1.6;
+        const bottom = -s * 0.3 + s * 0.68 * down;
+        for (let k = -2; k <= 2; k++) { c.beginPath(); c.moveTo(k * s * 0.12, -s * 0.3); c.lineTo(k * s * 0.12, bottom); c.stroke(); }
+        c.beginPath(); c.moveTo(-s * 0.3, bottom - s * 0.1); c.lineTo(s * 0.3, bottom - s * 0.1); c.stroke();
+        if (!o.closed) { c.fillStyle = exit ? P.venom : P.gold; c.beginPath(); c.moveTo(0, s * 0.3); c.lineTo(-s * 0.1, s * 0.16); c.lineTo(s * 0.1, s * 0.16); c.closePath(); c.fill(); }
+        break;
+      }
       case 'door': case 'vault': {
         if (o.broken) {
           c.strokeStyle = P.iron;
@@ -900,6 +931,9 @@
       default: c.beginPath(); c.moveTo(-k, k * 0.6); c.lineTo(0, -k * 0.6); c.lineTo(k, k * 0.6); c.stroke(); c.beginPath(); c.moveTo(-k * 0.6, k * 1.1); c.lineTo(0, 0); c.lineTo(k * 0.6, k * 1.1); c.stroke();
     }
   }
+  // for the guide's little scenes: a hero or a staircase at any point on any canvas
+  RD.drawHero = function (c, h, cx, cy, s) { c.save(); c.translate(cx, cy); heroGlyph(c, h, s); c.restore(); };
+  RD.drawStairs = (c, cx, cy, s, up) => stairs(c, cx, cy, s, up);
   RD.heroIcon = function (cv, h, size) {
     const d = Math.min(2, window.devicePixelRatio || 1);
     cv.width = size * d; cv.height = size * d;
@@ -1022,7 +1056,7 @@
         if (!R) { RD.glyph(c, it.type, cx, cy, T, { alpha: ui.carry === it.tile ? 0.25 : null }); badge(c, cx, cy, T, d.tier, it.lv); }
         continue;
       }
-      const o = { off: it.off || it.spent || it.jamT > 0 || (it.cd > 0 && G.phase === 'raid' && d.kind === 'trap'), broken: it.broken, hp: d.kind === 'door' ? it.hp / RD.scaled(it.type, 'hp', it.lv) : null };
+      const o = { off: it.off || it.spent || it.taken || it.jamT > 0 || (it.cd > 0 && G.phase === 'raid' && d.kind === 'trap'), broken: it.broken, hp: d.kind === 'door' && !d.oneway ? it.hp / RD.scaled(it.type, 'hp', it.lv) : null, closed: d.exit ? !(G.phase === 'raid' && it.opened) : !!it.dropped };
       if (d.kind === 'turret') {
         const dirs = [[1, 0, 0], [-1, 0, Math.PI], [0, 1, Math.PI / 2], [0, -1, -Math.PI / 2]];
         const [x, y] = xy(it.tile);
@@ -1033,6 +1067,20 @@
       if (ui.carry === it.tile) o.alpha = 0.25;
       RD.glyph(c, it.type, cx, cy, T, o);
       if (G.phase === 'build') badge(c, cx, cy, T, d.tier, it.lv);
+    }
+
+    // ghosts of fallen legends, drifting where they fell (vengeful ones walk as spectres during a raid)
+    for (const gh of G.ghosts || []) {
+      if (gh.gone || !on(gh.tile) || (R && gh.kind === 'vengeful')) continue;
+      const [cx, cy] = tc(gh.tile);
+      const p = 0.5 + 0.5 * Math.sin(V.time * 2 + gh.tile);
+      c.save();
+      c.globalAlpha = 0.3 + 0.2 * p;
+      RD.drawHero(c, { cls: gh.cls, tier: gh.tier, title: gh.title }, cx, cy - T * 0.1 * p, T * 0.9);
+      c.restore();
+      c.strokeStyle = `rgba(179,139,224,${0.25 + 0.35 * p})`;
+      c.lineWidth = 2;
+      c.beginPath(); c.arc(cx, cy, T * (0.42 + 0.06 * p), 0, Math.PI * 2); c.stroke();
     }
 
     if (R && R.lure && on(R.lure.tile)) {
@@ -1162,6 +1210,30 @@
     }
 
     if (V.guildMap) drawGuildMap(c, G, R ? (R.feud ? G.guild.K : R.shared) : G.guild.K);
+
+    // a scried raid: blue footprints where the rehearsed heroes walked, darker where they walked most
+    const fc = ui.forecast;
+    if (fc && ui.showHeat && !fc.stale && G.phase === 'build' && fc.night === G.raid) {
+      const base = F * N;
+      for (let i = 0; i < N; i++) {
+        const v = fc.heat[base + i];
+        if (!(v > 0.03)) continue;
+        const [cx, cy] = tc(base + i);
+        c.fillStyle = `rgba(156,192,230,${0.18 + 0.55 * v})`;
+        for (const [dx, dy, r] of [[-0.12, 0.08, 0], [0.12, -0.08, 0.4]]) {
+          c.beginPath(); c.ellipse(cx + dx * T, cy + dy * T, T * 0.07, T * 0.12, r, 0, Math.PI * 2); c.fill();
+        }
+      }
+    }
+
+    // a refused gate: red dashed rings on the corridors it would cut off
+    if (ui.trouble && G.phase === 'build') {
+      c.strokeStyle = 'rgba(228,106,124,0.9)';
+      c.lineWidth = 2;
+      c.setLineDash([4, 3]);
+      for (const g of ui.trouble) { if (!on(g)) continue; const [cx, cy] = tc(g); c.beginPath(); c.arc(cx, cy, T * 0.4, 0, Math.PI * 2); c.stroke(); }
+      c.setLineDash([]);
+    }
 
     // tutorial markers: pulsing gold rings on the tiles the coach is talking about
     for (const g of V.marks) {

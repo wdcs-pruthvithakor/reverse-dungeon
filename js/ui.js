@@ -31,7 +31,7 @@
   // ---------------------------------------------------------------- what carries over between dungeons
   const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const seedOf = (str) => { let h = 2166136261; for (const ch of str) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return (h >>> 0) % 1e6; };
-  const meta = () => ({ trophies: {}, slain: 0, runs: 0, best: {}, daily: {}, souls: 0, heart: {}, streak: 0, lastDay: null, gift: null, ...store.get('meta', {}) });
+  const meta = () => ({ trophies: {}, slain: 0, runs: 0, best: {}, daily: {}, souls: 0, heart: {}, streak: 0, lastDay: null, gift: null, combos: {}, ...store.get('meta', {}) });
   // the daily dungeon's two twists, the same for everyone on a given day
   const dailyTwists = (day) => {
     const rng = RD.makeRng(seedOf('rd-twists-' + day));
@@ -126,13 +126,13 @@
 
   // ---------------------------------------------------------------- toast
   let toastT = 0;
-  function toast(msg, good) {
+  function toast(msg, good, ms) {
     const t = $('toast');
     t.textContent = msg;
     t.className = 'toast show' + (good ? ' good' : '');
     if (!good) sfx('error');
     clearTimeout(toastT);
-    toastT = setTimeout(() => (t.className = 'toast'), good ? 3200 : 1800);
+    toastT = setTimeout(() => (t.className = 'toast'), ms || (good ? 3200 : 1800));
   }
 
   // ---------------------------------------------------------------- blueprints
@@ -140,6 +140,42 @@
     ui.tool = t;
     ui.carry = null;
     renderBlueprints();
+    // full screen: the drawer closes once you've picked, so the next tap can go on the map
+    if (ui.focus && ui.drawer) setDrawer(false);
+    renderToolChip();
+  }
+
+  // ---------------------------------------------------------------- full screen (focus mode)
+  // The browser's own full screen where it is allowed, plus a stripped layout: the map, the stats that matter,
+  // and the blueprints in a drawer.
+  function setFocus(on) {
+    ui.focus = on;
+    $('app').classList.toggle('focus', on);
+    $('focus-btn').setAttribute('aria-pressed', on);
+    $('focus-btn').textContent = on ? 'Exit full screen' : 'Full screen';
+    store.set('focus', on);
+    setDrawer(false);
+    const el = document.documentElement;
+    try {
+      if (on && !document.fullscreenElement && el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      if (!on && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    } catch (e) { /* not allowed here (iPhone, some portals): the stripped layout still applies */ }
+    renderToolChip();
+    setTimeout(fit, 60);
+  }
+  function setDrawer(open) {
+    ui.drawer = open;
+    $('app').classList.toggle('drawer', open);
+    $('drawer-btn').setAttribute('aria-expanded', open);
+  }
+  // what you're about to place, on the map, so the drawer can stay shut
+  function renderToolChip() {
+    const c = $('toolchip');
+    if (!ui.focus || !G || G.phase !== 'build') { c.hidden = true; return; }
+    const d = RD.ITEMS[ui.tool], T2 = RD.TOOLS[ui.tool];
+    const cost = RD.costOf(G, ui.tool);
+    c.innerHTML = `${d ? tierTag(d.tier) + ' ' : ''}${esc(d ? d.name : T2 ? T2.name : '')}${cost ? ` · <span class="m">${cost}</span>` : ''} <span class="chg">change</span>`;
+    c.hidden = false;
   }
 
   function card(type, sale, locked) {
@@ -150,7 +186,7 @@
     b.setAttribute('aria-pressed', ui.tool === type);
     const cv = el('canvas');
     RD.drawIcon(cv, type, 36);
-    const kind = d.boss ? (d.lord ? 'Demon Lord' : d.myth ? 'Myth boss' : 'Boss') : d.den ? 'Horde' : { trap: d.hidden ? 'Hidden trap' : 'Trap', turret: 'Wall piece', monster: d.elite ? 'Elite monster' : 'Monster', door: 'Obstacle', totem: 'Room', seal: 'Boss seal' }[d.kind];
+    const kind = d.boss ? (d.lord ? 'Demon Lord' : d.myth ? 'Myth boss' : 'Boss') : d.den ? 'Horde' : { trap: d.hidden ? 'Hidden trap' : 'Trap', turret: 'Wall piece', monster: d.elite ? 'Elite monster' : 'Monster', door: 'Obstacle', totem: 'Room', seal: 'Boss seal', bait: 'Bait' }[d.kind];
     const sub = locked ? `Unlocks night ${RD.realNight(G, RD.TIER_UNLOCK[d.tier])}` : `${kind}${sale ? ' · <span class="sale">30% OFF</span>' : ''}`;
     b.append(cv, el('span', 'name', `${tierTag(d.tier)} ${esc(d.name)}<small>${sub}</small>`), el('span', 'cost', locked ? '—' : cost));
     if (locked) b.disabled = true;
@@ -206,6 +242,7 @@
     paid.type = 'button';
     paid.onclick = () => {
       if (G.malice < cost) return toast(`Needs ${cost} malice.`);
+      pushUndo();
       G.malice -= cost;
       RD.rerollDeals(G);
       sfx('sell');
@@ -285,6 +322,18 @@
     if (shape !== ui.floorShape) {
       ui.floorShape = shape;
       box.innerHTML = '';
+      // past three floors the tabs get a scrolling row of their own; past five they drop their labels
+      // (theme and boss stay in each tab's tooltip)
+      box.classList.toggle('many', G.floors > 3);
+      box.classList.toggle('compact', G.floors > 5);
+      if (raid) {
+        const fb = el('button', 'floor follow', 'Follow heroes');
+        fb.type = 'button';
+        fb.id = 'follow';
+        fb.title = 'Keep the view on the floor where the heroes are';
+        fb.onclick = () => { ui.follow = !ui.follow; follow(); renderFloors(); };
+        box.append(fb);
+      }
       for (let f = 0; f < G.floors; f++) {
         const b = el('button', 'floor');
         b.type = 'button';
@@ -294,17 +343,10 @@
         const th = RD.themeOf(G, f * RD.N);
         const sealed = [...G.items.values()].some((it) => it.type === 'seal' && RD.fl(it.tile) === f);
         b.title = `${th.name}: ${th.desc}${boss ? ` Boss: ${RD.ITEMS[boss.type].name}.` : ''}${sealed ? ' Sealed while the boss lives.' : ''}`;
-        b.innerHTML = `Floor ${RD.ROMAN[f]}${hoard}${G.themes && G.themes[f] && G.themes[f] !== 'halls' ? ` <small class="theme">${esc(th.name)}</small>` : ''}${boss ? ` <small>${sealed ? '🔒 ' : ''}${esc(RD.ITEMS[boss.type].name)}</small>` : ''} <span class="count" hidden></span>`;
+        b.innerHTML = `<span class="fl-word">Floor </span>${RD.ROMAN[f]}${hoard}${sealed ? ' <span title="Sealed while the boss lives">🔒</span>' : ''}${G.themes && G.themes[f] && G.themes[f] !== 'halls' ? ` <small class="theme">${esc(th.name)}</small>` : ''}${boss ? ` <small>${esc(RD.ITEMS[boss.type].name)}</small>` : ''} <span class="count" hidden></span>`;
+        b.setAttribute('aria-label', `Floor ${RD.ROMAN[f]}`);
         b.onclick = () => setFloor(f, true);
         box.append(b);
-      }
-      if (raid) {
-        const fb = el('button', 'floor follow', 'Follow heroes');
-        fb.type = 'button';
-        fb.id = 'follow';
-        fb.title = 'Keep the view on the floor where the heroes are';
-        fb.onclick = () => { ui.follow = !ui.follow; follow(); renderFloors(); };
-        box.append(fb);
       }
       if (digErr != null) {
         const b = el('button', 'floor dig' + (digErr ? ' wait' : ''));
@@ -337,8 +379,10 @@
     });
   }
   function digFloor(theme) {
+    const snap = snapshot();
     const res = RD.openFloor(G, theme);
     if (res.err) return toast(res.err);
+    pushUndo(snap);
     setFloor(res.floor);
     RD.view.dirty = true;
     sfx('dig');
@@ -363,6 +407,12 @@
     }
     const fb = $('follow');
     if (fb) { fb.classList.toggle('on', ui.follow); fb.setAttribute('aria-pressed', ui.follow); }
+    // keep the floor on show in view when the tabs scroll
+    if (box.classList.contains('many') && ui.tabFloor !== RD.view.floor) {
+      ui.tabFloor = RD.view.floor;
+      const on = box.querySelector('.floor.on');
+      if (on) box.scrollLeft = Math.max(0, on.offsetLeft - box.offsetLeft - box.clientWidth / 2 + on.offsetWidth / 2);
+    }
   }
 
   // ---------------------------------------------------------------- ledger
@@ -441,7 +491,7 @@
     $('st-raid').parentNode.title = `${RD.modeOf(G).name} · ${RD.DIFF[G.diff].name}${G.pact ? ' · ' + RD.PACTS[G.pact].name : ''}`;
     setStat('st-gold', String(G.gold));
     setStat('st-malice', String(G.malice));
-    const t = Math.round(G.guild.threat);
+    const t = Math.max(0, Math.min(RD.MAX_TIER, Math.round(G.guild.threat))); // threat can climb past EX late in a run
     setStat('st-rating', RD.TIERS[t] + (G.guild.renown > 0.005 ? '+' : ''), RD.TIER_COLOR[t]);
     $('st-rating').parentNode.title = `What the guild thinks your dungeon is worth.${G.guild.renown > 0.005 ? ` Renown +${Math.round(G.guild.renown * 100)}%: every night they fail to take gold, they train harder.` : ''}`;
     setStat('st-known', Math.round(RD.coverage(G, G.guild.K) * 100) + '%');
@@ -457,7 +507,57 @@
     $('build-actions').hidden = raid;
     $('raid-actions').hidden = !raid;
     $('blueprints').classList.toggle('locked', G.phase !== 'build');
+    $('app').classList.toggle('raiding', raid);
     if (raid) renderPowers();
+    renderForecast();
+    renderUndo();
+    renderToolChip();
+  }
+
+  // ---------------------------------------------------------------- scrying
+  // Rehearse tonight's raid on copies of the dungeon. Paid in malice; any change to the build makes it stale.
+  function scry() {
+    if (G.phase !== 'build') return;
+    const cost = RD.scryCost(G);
+    if (G.malice < cost) return toast(`Scrying needs ${cost} malice. You have ${G.malice}.`);
+    G.malice -= cost;
+    $('scry').disabled = true;
+    $('scry').textContent = 'Scrying…';
+    // let the button repaint before three rehearsals run
+    setTimeout(() => {
+      ui.forecast = RD.forecast(G, 3);
+      ui.showHeat = true;
+      sfx('summon');
+      save();
+      renderStats();
+      renderForecast();
+      $('forecast').hidden = false;
+      hideDispatch();
+    }, 30);
+  }
+  function renderForecast() {
+    const b = $('scry');
+    const build = G.phase === 'build';
+    b.disabled = false;
+    b.innerHTML = `Scry<span class="long"> the raid</span> <span class="m">${RD.scryCost(G)}</span>`;
+    const f = ui.forecast;
+    if (!f || !build || f.night !== G.raid) { $('forecast').hidden = true; if (f && f.night !== G.raid) ui.forecast = null; return; }
+    f.stale = f.sig !== RD.buildSig(G);
+    $('forecast-title').textContent = `Night ${G.raid}: ${f.runs} rehearsals`;
+    const rng = (a, b2) => (a === b2 ? `${a}` : `${a}–${b2}`);
+    const top = f.pieces.slice(0, 4);
+    const max = Math.max(1, ...top.map((p) => p.dmg));
+    $('forecast-body').innerHTML = f.stale
+      ? `<p class="note warn">You changed the dungeon since this was scried, so it no longer holds. Scry again to see the new picture.</p>`
+      : `<p class="big">${rng(...f.range.killed)} of ${f.party} heroes fall${f.range.gold[1] > 0 ? ` · ${rng(Math.round(f.range.gold[0]), Math.round(f.range.gold[1]))} gold taken` : ' · the hoard holds'}</p>
+        <p class="note">Blue footprints on the map show where they walk. Heroes vary a little from the scry, so the real night can differ.</p>
+        ${top.length ? `<ul class="dmg">${top.map((p) => `<li><span class="nm">${esc(p.name)}${p.tile != null ? ` <small>${RD.coord(p.tile)}</small>` : ''}</span><span class="bar"><i style="width:${(100 * p.dmg) / max}%"></i></span><span class="v">${p.dmg}${p.kills >= 0.5 ? ` · ${p.kills.toFixed(p.kills % 1 ? 1 : 0)} kills` : ''}</span></li>`).join('')}</ul>` : '<p class="note">None of your pieces would touch them.</p>'}
+        ${f.idle.length ? `<p class="note">${f.idle.length} piece${f.idle.length > 1 ? 's' : ''} would never see a hero (ringed in gold).</p>` : ''}
+        ${Object.keys(f.combos).length ? `<p class="note">Combos: ${Object.entries(f.combos).map(([k, v]) => `${esc(RD.COMBOS[k].name)} ×${Math.round(v / f.runs)}`).join(', ')}</p>` : ''}
+        <label class="heat"><input type="checkbox" id="heat-toggle"${ui.showHeat ? ' checked' : ''}> Show footprints</label>`;
+    const ht = $('heat-toggle');
+    if (ht) ht.onchange = () => { ui.showHeat = ht.checked; };
+    if (!ui.tut) RD.view.marks = f.stale ? [] : f.idle.slice();
   }
 
   // the raid's power bar: open powers, plus the next one to come with the night it opens
@@ -489,7 +589,7 @@
           ui.power = null;
         } else {
           ui.power = ui.power === k ? null : k;
-          if (ui.power) toast(`${p.name}: pick a tile on the map.`, true);
+          if (ui.power) toast(`${p.name}: ${ui.touch ? 'tap' : 'click'} a tile on the map.`, true);
         }
         ui.armed = -1;
         renderPowers();
@@ -541,10 +641,12 @@
     const prevHover = ui.hoverIt;
     ui.hoverIt = i >= 0 && G.phase === 'build' ? G.items.get(i) || null : null;
     if (ui.hoverIt !== prevHover) renderDetail();
-    if (i < 0 || G.phase !== 'build') { ui.previewError = null; return; }
+    if (i < 0 || G.phase !== 'build') { ui.previewError = null; ui.trouble = null; return; }
     if (ui.tool === 'move') ui.previewError = ui.carry != null ? RD.check(G, 'move', i, ui.carry) : G.items.has(i) ? null : 'Pick a piece to move.';
-    else if (ui.tool === 'inspect') ui.previewError = G.items.has(i) ? null : 'Nothing to inspect here.';
+    else if (ui.tool === 'inspect') ui.previewError = G.items.has(i) || ghostAt(i) ? null : 'Nothing to inspect here.';
     else ui.previewError = RD.check(G, ui.tool, i);
+    // a refused gate shows which corridors it would cut off
+    ui.trouble = ui.previewError && RD.gateTrouble && RD.ITEMS[ui.tool] && (RD.ITEMS[ui.tool].oneway || RD.ITEMS[ui.tool].exit) ? RD.gateTrouble.slice() : null;
     const it = G.items.get(i);
     let what = it ? ` · ${RD.TIERS[RD.ITEMS[it.type].tier]}-rank ${RD.ITEMS[it.type].name} Lv${it.lv || 1}` : i === G.hoard ? ' · the hoard' : RD.isGate(G, i) ? (i === G.entrance ? ' · the gate' : ' · stairs up') : RD.isStairs(G, i) ? ' · stairs down' : '';
     if (it && ui.tool === 'upgrade' && !ui.previewError) what += ` · Lv${(it.lv || 1) + 1} for ${RD.levelCost(it)} malice`;
@@ -569,7 +671,7 @@
     if (G.phase !== 'build') return;
     if (ui.tool === 'inspect') {
       const it = G.items.get(i);
-      if (!it) return toast('Nothing here. Click a placed piece.');
+      if (!it) return ghostAt(i) ? showGhost(ghostAt(i)) : toast('Nothing here. Click a placed piece.');
       return showPiece(it.type, { it });
     }
     if (ui.tool === 'move') {
@@ -580,16 +682,21 @@
         return;
       }
       if (i === ui.carry) { ui.carry = null; renderDetail(); return; }
+      const snap = snapshot();
       const res = RD.apply(G, 'move', i, ui.carry);
       if (res.err) return toast(res.err);
+      pushUndo(snap);
       ui.carry = null;
       sfx('place');
       renderDetail();
       afterBuild();
       return;
     }
+    const snap = snapshot();
     const res = RD.apply(G, ui.tool, i);
     if (res.err) return toast(res.err);
+    pushUndo(snap);
+    if (ui.touch && /^Tap again/.test($('toast').textContent)) $('toast').className = 'toast'; // the "tap again" hint has done its job
     if (res.map) RD.view.dirty = true;
     sfx(res.map ? 'dig' : res.lv ? 'level' : res.gained ? 'sell' : 'place');
     if (RD.ITEMS[ui.tool]) tutorial('placed', RD.ITEMS[ui.tool]);
@@ -604,6 +711,17 @@
     preview(RD.view.hover);
   }
 
+  // what a second tap on a tile will do, in words
+  function tapVerb(i) {
+    const t = ui.tool, it = G.items.get(i);
+    if (RD.ITEMS[t]) return `place the ${RD.ITEMS[t].name} (${RD.costOf(G, t)} malice)`;
+    if (t === 'move') return ui.carry != null ? 'set it down here' : 'pick this up';
+    if (t === 'upgrade') return it ? `level up the ${RD.ITEMS[it.type].name} (${RD.levelCost(it)} malice)` : 'level up';
+    if (t === 'sell') return it ? `sell the ${RD.ITEMS[it.type].name} for ${RD.refund(it)} malice` : 'sell';
+    if (t === 'inspect') return 'see its details';
+    return { dig: `dig here (${RD.costOf(G, 'dig')} malice)`, fill: `fill this in (${RD.costOf(G, 'fill')} malice)`, hoard: `move the hoard here (${RD.costOf(G, 'hoard')} malice)` }[t] || 'confirm';
+  }
+
   // during a raid: the hero or monster nearest the click, else the piece on that tile
   function inspectAt(i) {
     const [cx, cy] = [RD.xy(i)[0] + 0.5, RD.xy(i)[1] + 0.5], f = RD.fl(i);
@@ -614,12 +732,81 @@
     if (m) return showPiece(m.type, { m });
     const it = G.items.get(i);
     if (it) return showPiece(it.type, { it });
+    if (ghostAt(i)) showGhost(ghostAt(i));
+  }
+  const ghostAt = (i) => (G.ghosts || []).find((gh) => !gh.gone && gh.tile === i);
+  function showGhost(gh) {
+    toast(`Ghost of ${gh.name} ${gh.title} (${RD.GHOSTS[gh.kind].name}): ${RD.GHOSTS[gh.kind].desc} Fades after night ${gh.fade}.`, true, 7000);
+  }
+
+  // ---------------------------------------------------------------- undo and saved layouts
+  // Every build action can be undone until the gate opens: each one keeps a copy of the dungeon from just before.
+  ui.undo = [];
+  const snapshot = () => JSON.stringify(RD.saveGame(G));
+  function pushUndo(snap) {
+    ui.undo.push(snap || snapshot());
+    if (ui.undo.length > 60) ui.undo.shift();
+    renderUndo();
+  }
+  function undo() {
+    if (G.phase !== 'build' || !ui.undo.length) return toast('Nothing to undo.');
+    const tool = ui.tool, floor = RD.view.floor;
+    G = RD.loadGame(JSON.parse(ui.undo.pop()));
+    ui.tool = tool;
+    ui.carry = null;
+    ui.hoverIt = null;
+    ui.floorShape = null;
+    setFloor(Math.min(floor, G.floors - 1));
+    RD.view.dirty = true;
+    sfx('sell');
+    save();
+    renderAll();
+    toast('Undone.', true);
+  }
+  function renderUndo() {
+    const b = $('undo');
+    if (b) b.disabled = !(G && G.phase === 'build' && ui.undo.length);
+  }
+  // three saved layouts per floor, kept with the dungeon
+  function showLayouts() {
+    if (G.phase !== 'build') return;
+    const f = RD.view.floor;
+    const slots = (G.layouts[f] = G.layouts[f] || [null, null, null]);
+    const rows = slots.map((L, k) => {
+      if (!L) return `<li><div><b>Slot ${k + 1}</b><span>Empty</span></div><button type="button" class="ghost small" data-save="${k}">Save floor ${RD.ROMAN[f]} here</button></li>`;
+      const est = RD.layoutCost(G, f, L);
+      const what = [est.placed && `${est.placed} to place`, est.sold && `${est.sold} to sell`, est.dug && `${est.dug} to dig`, est.filled && `${est.filled} to fill`, est.levelled && `${est.levelled} level-ups`].filter(Boolean).join(', ') || 'already matches';
+      return `<li><div><b>Slot ${k + 1}</b><span>Saved on night ${L.night} · ${L.items.length} pieces · ${what}${est.skipped.length ? ` · ${est.skipped.length} can’t be placed` : ''}</span></div>
+        <span class="acts"><button type="button" class="go small" data-load="${k}">Rebuild · <span class="m">${est.cost > 0 ? est.cost : 0}</span>${est.cost < 0 ? ` (+${-est.cost} back)` : ''}</button><button type="button" class="ghost small" data-save="${k}">Overwrite</button><button type="button" class="ghost small" data-clear="${k}">Clear</button></span></li>`;
+    }).join('');
+    openModal(`
+      <p class="eyebrow">Floor ${RD.ROMAN[f]}</p>
+      <h2 id="sheet-title">Saved layouts</h2>
+      <p class="lede">Save this floor’s corridors and pieces, then rebuild them in one go on a later night. You pay only for what differs: pieces that don’t match are sold, missing ones are placed and levelled, rock is dug or filled. Anything the rules or your malice won’t allow is skipped. You can undo a rebuild.</p>
+      <ul class="layouts">${rows}</ul>
+      <div class="seedrow"><button type="button" class="go" id="layouts-close" data-focus>Close</button></div>`, (sh) => {
+      for (const b of sh.querySelectorAll('[data-save]')) b.onclick = () => { slots[+b.dataset.save] = RD.layoutOf(G, f); save(); toast(`Floor ${RD.ROMAN[f]} saved in slot ${+b.dataset.save + 1}.`, true); showLayouts(); };
+      for (const b of sh.querySelectorAll('[data-clear]')) b.onclick = () => { slots[+b.dataset.clear] = null; save(); showLayouts(); };
+      for (const b of sh.querySelectorAll('[data-load]')) b.onclick = () => {
+        pushUndo();
+        const res = RD.applyLayout(G, f, slots[+b.dataset.load]);
+        closeModal();
+        RD.view.dirty = true;
+        sfx('place');
+        afterBuild();
+        const done = [res.placed && `${res.placed} placed`, res.sold && `${res.sold} sold`, res.dug && `${res.dug} dug`, res.filled && `${res.filled} filled`, res.levelled && `${res.levelled} levelled`].filter(Boolean).join(', ') || 'nothing to change';
+        toast(`Floor ${RD.ROMAN[f]} rebuilt: ${done}, ${res.cost >= 0 ? res.cost + ' malice' : -res.cost + ' malice back'}.${res.skipped.length ? ` Skipped ${res.skipped.length}: ${res.skipped[0]}${res.skipped.length > 1 ? '…' : ''}` : ''}`, !res.skipped.length, 7000);
+      };
+      sh.querySelector('#layouts-close').onclick = closeModal;
+    });
   }
 
   function afterBuild() {
+    renderUndo();
     save();
     renderStats();
     renderBlueprints();
+    renderForecast();
     renderFloors();
     preview(RD.view.hover);
   }
@@ -636,6 +823,11 @@
     sfx('gate');
     hideDispatch();
     $('ptip').hidden = true;
+    ui.undo = [];
+    renderUndo();
+    if (ui.forecast && !ui.tut) RD.view.marks = [];
+    ui.forecast = null;
+    $('forecast').hidden = true;
     ui.stopT = ui.slowT = 0;
     bark('gate', null, 1);
     tutorial('raid');
@@ -655,8 +847,8 @@
     $('ptip').hidden = true;
     checkRaid(G.debrief);
     renderAll();
-    if (G.phase === 'over' && !canRevive()) { saveRecord(); store.del('save'); }
-    else if (G.phase !== 'over') store.set('save', RD.saveGame(G, true));
+    if (G.phase === 'over' && !canRevive()) { saveRecord(); store.del(slotKey()); }
+    else if (G.phase !== 'over') writeSave(G, true);
     setTimeout(() => showDebrief(), ui.slowT > 0 ? 1900 : 700);
   };
 
@@ -675,6 +867,7 @@
     if (top > was && G.raid > 1) msgs.push(`${RD.TIERS[top]}-rank blueprints unlocked`);
     if (G.floors < RD.maxFloors(G) && RD.floorNight(G, G.floors) === G.raid) msgs.push(`floor ${RD.ROMAN[G.floors]} can be dug`);
     if (msgs.length) toast(msgs.join(' · '), true);
+    setTimeout(() => centerOn(G.hoard), 30);
     P.context({ night: G.raid, difficulty: G.diff, mode: G.mode });
     showDispatch();
     const d = G.history[0];
@@ -738,6 +931,18 @@
     else if (type === 'loot') bark('loot', heroVals(d), 2);
     else if (type === 'flee') bark('flee', heroVals(d), 0, 0.5);
     else if (type === 'power') bark('power.' + d, null, 1, 0.7);
+    else if (type === 'combo') {
+      hitStop(0.06);
+      sfx('level');
+      const m = meta();
+      if (!m.combos[d.id]) {
+        m.combos[d.id] = true;
+        store.set('meta', m);
+        const c = RD.COMBOS[d.id];
+        toast(`Combo discovered: ${c.name}! ${c.desc} (Guide → Combos)`, true, 6500);
+        bark('combo', { c: c.name }, 3);
+      } else bark('combo', { c: RD.COMBOS[d.id].name }, 1, 0.25);
+    }
   };
 
   // ---------------------------------------------------------------- the guild's dispatch
@@ -849,7 +1054,7 @@
   }
 
   // ---------------------------------------------------------------- pieces up close
-  const kindOf = (d) => d.boss ? (d.lord ? 'Demon Lord' : d.myth ? 'Myth boss' : 'Boss') : d.den ? 'Horde' : d.summonOnly ? 'Summoned monster' : { trap: d.hidden ? 'Hidden trap' : 'Trap', turret: 'Wall piece', monster: d.elite ? 'Elite monster' : 'Monster', door: 'Obstacle', totem: 'Room', seal: 'Boss seal' }[d.kind];
+  const kindOf = (d) => d.boss ? (d.lord ? 'Demon Lord' : d.myth ? 'Myth boss' : 'Boss') : d.den ? 'Horde' : d.summonOnly ? 'Summoned monster' : { trap: d.hidden ? 'Hidden trap' : 'Trap', turret: 'Wall piece', monster: d.elite ? 'Elite monster' : 'Monster', door: 'Obstacle', totem: 'Room', seal: 'Boss seal', bait: 'Bait' }[d.kind];
   const SENSE = { mech: 'a mechanism', magic: 'magic', illusion: 'an illusion' };
   const classesWith = (f) => Object.values(RD.CLASSES).filter(f).map((C) => C.name);
   // the rules a piece plays by, in words
@@ -860,7 +1065,7 @@
     if (d.kind === 'trap') out.push(['chasm', 'abyss'].includes(type) ? 'Cannot be disarmed; heroes who know it walk a long way around.' : `Rogues and other disarmers (${classesWith((C) => C.disarm).join(', ')}) can switch it off once they know it is there.`);
     if (d.oneShot) out.push('Fires once a raid.');
     if (d.kind === 'turret') out.push(`Shoots heroes in line${d.chain ? ' and arcs lightning between them' : ''}. A hero it has hit who can disarm may jam it for 12s.${type === 'pylon' ? ` Needs line of sight; pylons must stand ${RD.GAP.pylon} tiles apart.` : RD.GAP[type] ? ` Must stand ${RD.GAP[type]} tiles from another ${d.name.toLowerCase()}.` : ''}`);
-    if (d.kind === 'door') out.push(d.nopick ? 'Cannot be picked; it has to be battered down.' : 'Knights batter it, rogues pick the lock.');
+    if (d.kind === 'door') out.push(d.oneway ? 'Open when the raid begins. Once the whole party has walked through it (the dead and anyone already running out don’t count) it falls and stays down until dawn; nobody can batter or pick it. Every Exit Gate on the same floor opens at that moment.' : d.exit ? 'Shut when the raid begins, so heroes have to come in by the Drop Gate. It opens the moment a Drop Gate on this floor falls, and every hero on the floor hears it.' : d.nopick ? 'Cannot be picked; it has to be battered down.' : 'Knights batter it, rogues pick the lock.');
     if (d.elite) out.push('Elite: outfights a whole party of its own rank.');
     if (d.boss) out.push(`Boss: one per floor and it never leaves its lair.${d.myth ? ' A myth: it comes late and hits like it.' : ''} Strike teams of specialists hunt known bosses.`);
     if (d.undead) out.push(`Undead: ${classesWith((C) => C.holy).join(', ')} deal extra damage to it.`);
@@ -951,11 +1156,52 @@
     return { cls, tier, lvl: 1, traits: [], name: C.name, title: C.unique ? RD.TITLES[cls] : '', maxHp: Math.round(C.hp * sc), dmg: C.dmg * sc, rate: C.rate, range: C.range, speed: C.speed, vision: C.vision, fleeAt: C.fleeAt, brave: C.brave, greed: C.greed };
   }
 
+  // "Show me on the map": close the guide and light up the real thing, a tile on the map or a control on screen
+  const SHOW = {
+    gate: { tile: () => G.entrance, say: 'The gate. Heroes come in here when you press Open the gate.' },
+    hoard: { tile: () => G.hoard, el: 'st-gold', say: 'Your hoard, and the Hoard counter at the top: the gold you have left. At 0 the dungeon falls.' },
+    malice: { el: 'st-malice', say: 'Malice: what you build with. Kills and every new night add more.' },
+    catalog: { el: 'catalog', say: 'Your blueprints. Pick one, then click a corridor tile on the map.' },
+    tools: { el: 'tools', say: 'Tools: Info, Dig, Fill, Move, Level, Hoard and Sell. Pick one, then click the map.' },
+    guild: { el: 'view-guild', say: 'The Guild’s map (or press G): what the heroes know about your dungeon.' },
+    floors: { el: 'floors', tile: () => (G.floors > 1 ? G.stairs[0] : null), say: 'Floor tabs. Dig a new floor here once it opens; the stairs lead down to it.' },
+    powers: { el: () => (G.phase === 'raid' ? 'powers' : 'go'), say: () => (G.phase === 'raid' ? 'Raid powers: click one, then a tile.' : 'Powers appear here once you Open the gate and the raid begins.') },
+    scry: { el: 'scry', say: 'Scry the raid: rehearse tonight’s raid before you open the gate. Costs malice; any change makes it stale.' },
+    rating: { el: 'st-rating', say: 'The guild’s rating of your dungeon. Higher rating, stronger heroes.' },
+  };
+  function pointAt(key) {
+    const d = SHOW[key];
+    if (!d) return;
+    closeModal();
+    const tile = d.tile ? d.tile() : null;
+    if (tile != null && tile >= 0) {
+      if (RD.fl(tile) !== RD.view.floor) setFloor(RD.fl(tile), G.phase === 'raid');
+      setTimeout(() => centerOn(tile, true), 30);
+      if (!ui.tut) {
+        RD.view.marks = [tile];
+        clearTimeout(ui.markTimer);
+        ui.markTimer = setTimeout(() => { if (!ui.tut) RD.view.marks = []; }, 6000);
+      }
+    }
+    const id = typeof d.el === 'function' ? d.el() : d.el;
+    const e = id && $(id);
+    if (e) {
+      const box = e.closest('.stats > div') || e;
+      box.classList.remove('spot');
+      void box.offsetWidth;
+      box.classList.add('spot');
+      if (box.scrollIntoView) box.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      setTimeout(() => box.classList.remove('spot'), 6000);
+    }
+    toast(typeof d.say === 'function' ? d.say() : d.say, true, 6000);
+  }
+
   // ---------------------------------------------------------------- the guide
   // Everything in the game, locked or not: pieces with their numbers, powers, heroes, traits, floors and omens.
-  const GUIDE_TABS = [['basics', 'Basics'], ['powers', 'Powers'], ...RD.GROUPS.map((g) => [g.id, g.name]), ['summons', 'Summons & hordes'], ['heroes', 'Heroes'], ['traits', 'Traits'], ['floors', 'Floor types'], ['omens', 'Omens & twists']];
+  const GUIDE_TABS = [['learn', 'How to play'], ['basics', 'Basics'], ['powers', 'Powers'], ...RD.GROUPS.map((g) => [g.id, g.name]), ['summons', 'Summons & hordes'], ['combos', 'Combos'], ['ghosts', 'Ghosts'], ['heroes', 'Heroes'], ['traits', 'Traits'], ['floors', 'Floor types'], ['omens', 'Omens & twists']];
   function guideBody(tab) {
     const entry = (icon, title, sub, body, open) => `<li class="gentry${open ? ' open' : ''}"${open ? ` data-open="${open}" tabindex="0" role="button"` : ''}><span class="gi" data-icon="${icon || ''}"></span><div><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}${body}${open ? '<span class="more">Full details ›</span>' : ''}</div></li>`;
+    if (tab === 'learn') return `<p class="note">Each picture plays on a loop. <b>Show me</b> closes the guide and points at the real thing in your dungeon.</p><ul class="lessons">${RD.HOWTO.map((l) => `<li class="lesson"><canvas data-lesson="${l.id}" aria-hidden="true"></canvas><div><b>${esc(l.title)}</b><p>${esc(l.text)}</p><button type="button" class="ghost small" data-show="${l.show}">Show me on the map</button></div></li>`).join('')}</ul>`;
     if (tab === 'basics') {
       const ranks = RD.TIERS.map((t, i) => `<span class="tier" style="--tc:${RD.TIER_COLOR[i]}">${t}</span> night ${RD.realNight(G, RD.TIER_UNLOCK[i])}`).join(' · ');
       return `<div class="gtext">
@@ -978,6 +1224,19 @@
         return entry('item:' + k, `${tierTag(d.tier)} ${esc(d.name)}`, `${d.tier <= top ? 'Open' : 'Opens night ' + RD.realNight(G, RD.TIER_UNLOCK[d.tier])} · <span class="m">${RD.costOf(G, k)}</span> malice${tags}`, `<p>${esc(d.desc)}</p>${statTable(k, 1, false)}`, `item:${k}`);
       }).join('')}</ul>`;
     }
+    if (tab === 'ghosts') {
+      const live = (G.ghosts || []).filter((gh) => !gh.gone);
+      return `<p class="note">A legend who dies in your dungeon may come back as a ghost in the room where they fell (the Chosen Hero always does). There can be ${RD.GHOST_MAX} at once; each fades ${RD.GHOST_NIGHTS} nights after its death, and a cleric, paladin, saint or sage who stands beside one for 3 seconds lays it to rest. Vengeful ones are laid to rest when killed.</p>
+        <ul class="gentries">${Object.values(RD.GHOSTS).map((k) => entry('', esc(k.name), '', `<p>${esc(k.desc)}</p>`)).join('')}</ul>
+        <h3>In your dungeon now</h3>${live.length ? `<ul class="gentries">${live.map((gh) => entry('hero:' + gh.cls, `Ghost of ${esc(gh.name)} <em>${esc(gh.title)}</em>`, `${RD.GHOSTS[gh.kind].name} · ${RD.coord(gh.tile)} · fades after night ${gh.fade}`, '')).join('')}</ul>` : '<p class="note">None yet.</p>'}`;
+    }
+    if (tab === 'combos') {
+      const got = meta().combos;
+      const n = Object.keys(RD.COMBOS).filter((k) => got[k]).length;
+      return `<p class="note">One thing catches a hero, the next hits harder. When it happens you will see the combo’s name over the hero. Discovered ${n} of ${Object.keys(RD.COMBOS).length}; the rest show only a hint until you pull them off.</p><ul class="gentries">${Object.entries(RD.COMBOS).map(([k, c]) => got[k]
+        ? entry('', `${esc(c.name)} <em>×${c.mult}</em>`, 'Discovered', `<p>${esc(c.desc)}</p><p class="note">${esc(c.hint)}</p>`)
+        : entry('', '??? <em>undiscovered</em>', '', `<p class="note">Hint: ${esc(c.hint)}</p>`)).join('')}</ul>`;
+    }
     if (tab === 'summons') {
       const parents = Object.keys(RD.ITEMS).filter((k) => RD.minionOf(k)).sort((a, b) => RD.ITEMS[a].tier - RD.ITEMS[b].tier);
       return `<p class="note">Bosses call help during a raid and hordes release a pack. They fight at their parent’s level, and summons at one rank below their boss, so a Demon Lord’s imps are SSS-rank. These are their numbers at Lv1 next to the piece that brings them.</p><ul class="gentries">${parents.map((k) => {
@@ -999,7 +1258,7 @@
     return '';
   }
   function showGuide(tab, back) {
-    tab = tab || ui.guideTab || 'basics';
+    tab = tab || ui.guideTab || 'learn';
     ui.guideTab = tab;
     openModal(`
       <p class="eyebrow">Guide</p>
@@ -1009,6 +1268,8 @@
       <div class="seedrow"><button type="button" class="go" id="guide-close" data-focus>${back ? 'Back' : 'Close'}</button></div>`, (sh) => {
       for (const b of sh.querySelectorAll('.guide-tabs button')) b.onclick = () => showGuide(b.dataset.k, back);
       icons(sh);
+      for (const cv of sh.querySelectorAll('canvas[data-lesson]')) RD.playHowto(cv, RD.HOWTO.find((l) => l.id === cv.dataset.lesson));
+      for (const b of sh.querySelectorAll('[data-show]')) b.onclick = () => pointAt(b.dataset.show);
       const again = () => showGuide(tab, back);
       for (const li of sh.querySelectorAll('.gentry[data-open]')) {
         const [kind, k, t] = li.dataset.open.split(':');
@@ -1055,21 +1316,27 @@
         <div><b>A friend challenged you</b><span>${esc(RD.MODES[chal.mode].name)} · ${esc(RD.DIFF[chal.diff].name)} · seed ${chal.seed}${chal.twists.length ? ' · ' + chal.twists.map((k) => esc(RD.TWISTS[k].name)).join(', ') : ''}${chal.score ? ` · beat ${chal.score}` : ''}</span></div>
         <button type="button" class="go" id="accept" data-focus>Accept</button>
       </div>` : ''}
-      ${live ? `<div class="resume">
-        <div><b>Your dungeon awaits</b><span>${esc(RD.modeOf(live).name)} · ${esc(RD.DIFF[live.diff].name)} · night ${live.raid}${live.endless ? ' (endless)' : ` of ${RD.winAt(live)}`} · ${live.gold} gold · rated ${RD.rating(live.guild.threat)}</span></div>
-        <button type="button" class="go" id="resume" ${chal ? '' : 'data-focus'}>Resume</button>
-      </div>` : ''}
+      <ul class="slots" aria-label="Save slots">${Array.from({ length: SLOTS }, (_, k) => {
+        const info = slotInfo(k), sel = k === ui.slot, playing = sel && live;
+        return `<li class="slot${sel ? ' on' : ''}${info ? '' : ' empty'}" data-slot="${k}">
+          <div><b>Slot ${k + 1}${playing ? ' · playing' : sel ? ' · selected' : ''}</b><span>${info ? `${esc(info.text)}${info.at ? ` · ${ago(info.at)}` : ''}` : 'Empty: a new dungeon can go here'}</span></div>
+          <span class="acts">${info
+            ? `<button type="button" class="go small" data-continue="${k}" ${playing && !chal ? 'id="resume" data-focus' : ''}>${playing ? 'Resume' : 'Continue'}</button><button type="button" class="ghost small" data-del="${k}">Delete</button>`
+            : sel ? '' : `<button type="button" class="ghost small" data-pick="${k}">Use this slot</button>`}</span>
+        </li>`;
+      }).join('')}</ul>
       <h2 id="sheet-title">The Reverse Dungeon</h2>
       <p class="lede">You are the dungeon. Build traps and monsters, then watch heroes try to steal your gold. Survivors tell the guild what they saw, so kill them before they get out.</p>
       <form id="seedform">
         <div class="playrow">
-          <button type="submit" class="${live || chal ? 'ghost' : 'go big'}" ${live || chal ? '' : 'data-focus'}>${live ? 'New dungeon' : 'Play'}</button>
+          <button type="submit" class="${live || chal ? 'ghost' : 'go big'}" ${live || chal ? '' : 'data-focus'}>${slotInfo(ui.slot) ? 'New dungeon' : 'Play'}</button>
           <button type="button" class="ghost daily-btn" id="daily" title="${esc(dTw.map((k) => RD.TWISTS[k].name + ': ' + RD.TWISTS[k].desc).join('  '))}">Daily: ${esc(dTw.map((k) => RD.TWISTS[k].name).join(' + '))}${dailyBest ? ` · best ${dailyBest}` : ''}</button>
           <button type="button" class="ghost" id="heart-btn">Dungeon Heart · ${m.souls} souls</button>
+          <button type="button" class="ghost" id="howto-intro">How to play</button>
           <button type="button" class="ghost" id="guide-intro">Guide</button>
           <button type="button" class="ghost" id="trophies">Trophies ${got}/${Object.keys(RD.TROPHIES).length}</button>
         </div>
-        <p class="note" id="summary">${esc(summary())}${live ? ' · replaces your saved dungeon' : ''}</p>
+        <p class="note" id="summary">${esc(summary())}${slotNote()}</p>
         ${m.streak > 1 ? `<p class="note streak">Day ${m.streak} in a row${m.gift === day ? '' : ` · your first dungeon today brings ${Math.min(20, 2 * m.streak)} souls`}</p>` : ''}
         <details class="more">
           <summary>Mode, difficulty, pact, twists and seed</summary>
@@ -1086,11 +1353,30 @@
       </form>
       ${m.runs ? `<p class="record">${m.runs} dungeon${m.runs === 1 ? '' : 's'} so far, ${m.slain} heroes slain.${m.best[`${ui.mode}:${ui.diff}`] ? ` Best ${esc(RD.MODES[ui.mode].name)} · ${esc(RD.DIFF[ui.diff].name)} score: ${m.best[`${ui.mode}:${ui.diff}`]}.` : ''}</p>` : ''}
       ${ui.canSave ? '' : '<p class="note warn">This browser window is blocking storage, so progress will not be saved.</p>'}`, (s) => {
-      const r = s.querySelector('#resume');
-      if (r) r.onclick = () => closeModal();
+      // save slots: pick one for the next new dungeon, continue one, or delete one (asks twice)
+      for (const li of s.querySelectorAll('.slot')) li.onclick = (e) => { if (e.target.closest('button')) return; pickSlot(+li.dataset.slot); showIntro(); };
+      for (const b of s.querySelectorAll('[data-pick]')) b.onclick = () => { pickSlot(+b.dataset.pick); showIntro(); };
+      for (const b of s.querySelectorAll('[data-continue]')) b.onclick = () => {
+        const k = +b.dataset.continue;
+        if (k === ui.slot && live) return closeModal();
+        let g2 = null;
+        try { g2 = RD.loadGame(store.get(slotKey(k), null)); } catch (e) { g2 = null; }
+        if (!g2) { toast('That save could not be read.'); store.del(slotKey(k)); return showIntro(); }
+        pickSlot(k);
+        newGame(null, g2, g2.diff);
+        closeModal();
+        toast(`Slot ${k + 1}: ${RD.modeOf(G).name} · night ${G.raid}.`, true);
+      };
+      for (const b of s.querySelectorAll('[data-del]')) b.onclick = () => {
+        if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = 'Really delete?'; return; }
+        const k = +b.dataset.del;
+        store.del(slotKey(k));
+        toast(`Slot ${k + 1} deleted.`, true);
+        showIntro();
+      };
       const refresh = () => {
         for (const l of s.querySelectorAll('.diff')) l.classList.toggle('on', l.querySelector('input').checked);
-        s.querySelector('#summary').textContent = summary() + (live ? ' · replaces your saved dungeon' : '');
+        s.querySelector('#summary').textContent = summary() + slotNote();
       };
       const savePrefs = () => store.set('prefs', { mode: ui.mode, diff: ui.diff, pact: ui.pact, twists: ui.twists });
       for (const inp of s.querySelectorAll('input[type=radio], input[type=checkbox]')) inp.onchange = () => {
@@ -1105,6 +1391,7 @@
       s.querySelector('#trophies').onclick = () => showTrophies();
       s.querySelector('#heart-btn').onclick = () => showHeart();
       s.querySelector('#guide-intro').onclick = () => showGuide(null, showIntro);
+      s.querySelector('#howto-intro').onclick = () => showGuide('learn', showIntro);
       s.querySelector('#daily').onclick = () => begin(seedOf('rd-daily-' + day), 'daily', 'normal', dTw);
       const acc = s.querySelector('#accept');
       if (acc) acc.onclick = () => { ui.challenge = null; begin(chal.seed, chal.mode, chal.diff, chal.twists); };
@@ -1126,6 +1413,8 @@
     else announce();
     if (gift) setTimeout(() => toast(`Day ${meta().streak} streak: +${gift} souls for the Dungeon Heart.`, true), 3300);
   }
+
+  const slotNote = () => (slotInfo(ui.slot) ? ` · replaces the dungeon in slot ${ui.slot + 1}` : ` · goes in slot ${ui.slot + 1}`);
 
   // permanent upgrades bought with souls
   function showHeart() {
@@ -1227,12 +1516,15 @@
         <div><dt>Escaped</dt><dd style="color:var(--steel)">${d.escaped.length}</dd></div>
         <div><dt>Gold lost</dt><dd style="color:var(--gold)">${d.goldLost}</dd></div>
         <div><dt>Malice earned</dt><dd style="color:var(--malice-hi)">${d.malice + d.income}</dd></div>
-        ${over ? '' : `<div><dt>Next rating</dt><dd style="color:${RD.TIER_COLOR[Math.round(a.threat)]}">${RD.rating(a.threat)}</dd></div>`}
+        ${over ? '' : `<div><dt>Next rating</dt><dd style="color:${RD.TIER_COLOR[Math.max(0, Math.min(RD.MAX_TIER, Math.round(a.threat)))]}">${RD.rating(a.threat)}</dd></div>`}
       </dl>
       <div class="cols">
         <div><h3>Slain</h3><ul class="names">${names(d.killed, 'k')}</ul></div>
         <div><h3>Escaped</h3><ul class="names">${names(d.escaped, 'e', (h) => (h.carry ? ` · ${h.carry} gold` : '') + (h.growth ? ` · <span class="growth">${esc(h.growth)}</span>` : ''))}</ul></div>
       </div>
+      ${reportHtml(d)}
+      ${d.fallen && d.fallen.length ? `<p class="note warn fallen">Fallen for good (Mortal Monsters): ${d.fallen.map((x) => `${esc(RD.ITEMS[x.type].name)} Lv${x.lv} ${RD.coord(x.tile)}`).join(', ')}.</p>` : ''}
+      ${d.risen && d.risen.length ? `<h3>Something stays behind</h3><ul class="tips ghosts">${d.risen.map((gh) => `<li>The ghost of <b>${esc(gh.name)} ${esc(gh.title)}</b> haunts ${RD.coord(gh.tile)}: <b>${esc(RD.GHOSTS[gh.kind].name)}</b>. ${esc(RD.GHOSTS[gh.kind].desc)} It fades after ${RD.GHOST_NIGHTS} nights, or sooner if a cleric, paladin, saint or sage stands by it.</li>`).join('')}</ul>` : ''}
       ${rum ? `<h3>What the guild heard</h3><ul class="rumors">${rum}</ul>` : ''}
       <div class="seedrow">
         ${revive ? '<button type="button" class="go plain pair" id="again" data-focus>Accept defeat</button><button type="button" class="go rewarded pair" id="revive">🎬 Second chance: refill the hoard</button>' : over ? `<button type="button" class="go" id="again" data-focus>Wake a new dungeon</button>${G.result === 'won' ? '<button type="button" class="ghost" id="endless">Keep going (endless)</button>' : ''}` : `<button type="button" class="go" id="next" data-focus>Prepare the next night</button>`}
@@ -1243,10 +1535,21 @@
       const ch = s.querySelector('#challenge');
       if (ch) ch.onclick = () => shareChallenge(RD.score(G));
       s.querySelector('#share-card').onclick = () => shareReport(d, grade);
+      icons(s);
       setTimeout(() => sfx('crush'), 420);
       countUp(s);
       const go = (ad) => {
-        const next = () => { RD.nextNight(G); save(); RD.FX.floaters.length = RD.FX.parts.length = RD.FX.bubbles.length = 0; closeModal(); renderAll(); announce(); };
+        const idle = (d.report && d.report.idle) || [];
+        const next = () => {
+          RD.nextNight(G); save(); RD.FX.floaters.length = RD.FX.parts.length = RD.FX.bubbles.length = 0; closeModal(); renderAll(); announce();
+          const still = idle.filter((t) => G.items.has(t));
+          if (still.length && !ui.tut) {
+            RD.view.marks = still;
+            clearTimeout(ui.markTimer);
+            ui.markTimer = setTimeout(() => { if (!ui.tut && !ui.forecast) RD.view.marks = []; }, 10000);
+            setTimeout(() => toast(`Gold rings: ${still.length} piece${still.length > 1 ? 's' : ''} that never touched a hero last night. Move them onto the route.`, true, 6000), 3400);
+          }
+        };
         // a natural break between nights, never in the first few minutes
         if (ad && G.raid >= 3) P.midgame(next);
         else next();
@@ -1264,7 +1567,7 @@
         toast(`The hoard is refilled with ${G.gold} gold. This only happens once per dungeon.`, true);
       });
       const ag = s.querySelector('#again');
-      if (ag) ag.onclick = () => { if (G.phase === 'over') { saveRecord(); store.del('save'); if (!G.runRecord) G.runRecord = recordRun(); } showIntro(); };
+      if (ag) ag.onclick = () => { if (G.phase === 'over') { saveRecord(); store.del(slotKey()); if (!G.runRecord) G.runRecord = recordRun(); } showIntro(); };
       const en = s.querySelector('#endless');
       if (en) en.onclick = () => { G.endless = true; G.runRecord = null; G.phase = 'debrief'; RD.nextNight(G); save(); closeModal(); renderAll(); announce(); };
       s.querySelector('#log-btn').onclick = () => showReports(0, true);
@@ -1343,6 +1646,22 @@
     }, 'image/png');
   }
 
+  // Why the night went the way it did: each piece's damage and kills, idle pieces, combos, and up to three fixes.
+  function reportHtml(d) {
+    const r = d.report;
+    if (!r) return '';
+    const max = Math.max(1, ...r.pieces.map((p) => p.dmg));
+    const icon = (p) => (p.type ? (p.type.startsWith('power:') ? p.type : 'item:' + p.type) : '');
+    const idleNames = r.idle.map((t) => G.items.get(t)).filter(Boolean).map((it) => `${RD.ITEMS[it.type].name} ${RD.coord(it.tile)}`);
+    const combos = Object.entries(r.combos);
+    return `<h3>${d.escaped.length ? 'Why they survived' : 'Who did the killing'}</h3>
+      ${r.pieces.length ? `<ul class="dmg">${r.pieces.map((p) => `<li><span class="gi" data-icon="${icon(p)}"></span><span class="nm">${esc(p.name)}${p.tile != null ? ` <small>${RD.coord(p.tile)}</small>` : ''}</span><span class="bar"><i style="width:${(100 * p.dmg) / max}%"></i></span><span class="v">${p.dmg}${p.kills ? ` · ${p.kills} kill${p.kills > 1 ? 's' : ''}` : ''}</span></li>`).join('')}</ul>` : '<p class="note">Nothing you built touched a hero tonight.</p>'}
+      ${combos.length ? `<p class="note combo-line">Combos: ${combos.map(([k, v]) => `<b>${esc(RD.COMBOS[k].name)}</b> ×${v}`).join(', ')}</p>` : ''}
+      ${r.healed ? `<p class="note">Healers mended ${r.healed} health.${r.disarmed ? ` Rogues disarmed ${r.disarmed} trap${r.disarmed > 1 ? 's' : ''}.` : ''}</p>` : r.disarmed ? `<p class="note">Rogues disarmed ${r.disarmed} trap${r.disarmed > 1 ? 's' : ''}.</p>` : ''}
+      ${idleNames.length ? `<p class="note">Idle: ${idleNames.map(esc).join(', ')}.</p>` : ''}
+      ${r.tips.length ? `<ul class="tips">${r.tips.map((t) => `<li>${esc(t.text)}</li>`).join('')}</ul>` : ''}`;
+  }
+
   // dawn report numbers tick up instead of appearing
   function countUp(root) {
     for (const dd of root.querySelectorAll('.tally dd')) {
@@ -1374,9 +1693,11 @@
     $('go').classList.toggle('pulse', ui.tut === 3);
   }
   function endTutorial() {
+    const first = ui.tut && store.get('tut', null) !== 'done';
     ui.tut = 0;
     coach(null);
     store.set('tut', 'done');
+    if (first) setTimeout(() => toast('Guide → How to play shows every feature with a short animation.', true), 1200);
   }
   function tutorial(ev, d) {
     if (ev === 'start') {
@@ -1384,7 +1705,8 @@
       selectTool('spikes');
       const r = routeTiles();
       const spot = r.slice(Math.floor(r.length * 0.3)).find((t) => !RD.check(G, 'spikes', t));
-      coach('You are the dungeon. Heroes come in at the bright <b>gate</b> to steal your <b>gold</b>. Click the glowing tile to put a Spike Pit in their way.', [G.entrance, G.hoard, spot].filter((t) => t != null));
+      coach('You are the dungeon. Heroes come in at the bright <b>gate</b> to steal your <b>gold</b>. Tap the glowing tile to put a Spike Pit in their way.', [G.entrance, G.hoard, spot].filter((t) => t != null));
+      setTimeout(() => centerOn(spot), 60);
       return;
     }
     if (!ui.tut) return;
@@ -1393,7 +1715,8 @@
       selectTool('skeleton');
       const r = routeTiles();
       const spot = r.slice().reverse().slice(1, 6).find((t) => !RD.check(G, 'skeleton', t));
-      coach('Now a <b>Skeleton</b> to guard the gold. Click the glowing tile.', [spot, G.hoard].filter((t) => t != null));
+      coach('Now a <b>Skeleton</b> to guard the gold. Tap the glowing tile.', [spot, G.hoard].filter((t) => t != null));
+      centerOn(spot, true);
     } else if (ev === 'placed' && ui.tut === 2 && d.kind === 'monster') {
       ui.tut = 3;
       coach('Ready. Press <b>Open the gate</b>. Kill them all and the guild learns nothing.', []);
@@ -1437,8 +1760,22 @@
 
   // The game auto-saves at the start of each night and after every build action.
   // A refresh mid-raid replays that night from the build you left it in.
-  const hasSave = () => store.get('save', null) != null;
-  function save() { if (G && G.phase === 'build') store.set('save', RD.saveGame(G)); }
+  // Three save slots, one dungeon each. ui.slot is the one being played; the old single save becomes slot 1.
+  const SLOTS = 3;
+  const slotKey = (k) => 'save.' + (k == null ? ui.slot : k);
+  function writeSave(G2, pending) { store.set(slotKey(), { ...RD.saveGame(G2, pending), savedAt: Date.now() }); }
+  const hasSave = () => store.get(slotKey(), null) != null;
+  function save() { if (G && G.phase === 'build') writeSave(G); }
+  function pickSlot(k) { ui.slot = k; store.set('slot', k); }
+  // what a slot holds, for the menu, without loading it into play
+  function slotInfo(k) {
+    const o = store.get(slotKey(k), null);
+    if (!o || !o.seed) return null;
+    const mode = RD.MODES[o.mode] || RD.MODES.campaign, diff = RD.DIFF[o.diff] || RD.DIFF.normal;
+    const night = o.raid + (o.pending ? 1 : 0);
+    return { night, gold: o.gold, floors: o.floors || 1, endless: !!o.endless, text: `${mode.name} · ${diff.name} · night ${night}${o.endless ? ' (endless)' : ` of ${mode.win || diff.win}`} · ${o.gold} gold · ${o.floors || 1} floor${(o.floors || 1) > 1 ? 's' : ''}`, at: o.savedAt };
+  }
+  const ago = (t) => { if (!t) return ''; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 
   function saveRecord() {
     const best = store.get('best', { held: 0, slain: 0 });
@@ -1456,6 +1793,7 @@
     ui.armed = -1;
     if (ui.tut) { ui.tut = 0; coach(null); }
     hideDispatch();
+    ui.undo = [];
     setSpeed(1);
     RD.view.floor = 0;
     RD.fxFloor(0);
@@ -1463,20 +1801,41 @@
     RD.FX.floaters.length = RD.FX.parts.length = RD.FX.bubbles.length = 0;
     fit();
     renderAll();
+    setTimeout(() => { if (!ui.tut) centerOn(G.hoard); }, 50); // small screens open on the gold
   }
 
   // the map fills whatever room the board area has, times the zoom
   const ZOOMS = [1, 1.5, 2, 2.75];
+  // Phones: tiles are made big enough for a finger (TAP_T px) by starting zoomed in, and the board scrolls.
+  // Using the zoom buttons or a pinch hands the zoom back to the player.
+  const TAP_T = 28;
   function fit() {
     const wrap = $('board-wrap');
+    const W = Math.max(160, wrap.clientWidth - 10), H = Math.max(100, wrap.clientHeight - 10);
+    if (ui.autoZoom !== false) {
+      const base = Math.min((W - 14) / RD.COLS, (H - 14) / RD.ROWS);
+      let k = 0;
+      while (k < ZOOMS.length - 1 && base * ZOOMS[k] < TAP_T) k++;
+      ui.zoom = k;
+    }
     const z = ZOOMS[ui.zoom || 0];
-    RD.resize(Math.max(200, wrap.clientWidth - 10) * z, Math.max(140, wrap.clientHeight - 10) * z);
-    wrap.classList.toggle('zoomed', z > 1);
+    RD.resize(W * z, H * z);
+    // the map scrolls whenever it is bigger than its box, zoomed or not
+    wrap.classList.toggle('zoomed', z > 1 || RD.view.w > W + 10 || RD.view.h > H + 10);
     $('zoom-out').disabled = !ui.zoom;
     $('zoom-in').disabled = ui.zoom >= ZOOMS.length - 1;
   }
+  // bring a tile to the middle of the board (when the map is bigger than the board)
+  function centerOn(tile, smooth) {
+    if (tile == null || tile < 0 || !$('board-wrap').classList.contains('zoomed')) return;
+    if (RD.fl(tile) !== RD.view.floor) setFloor(RD.fl(tile));
+    const sc = $('board-scroll'), T = RD.view.T, M = RD.view.M, [x, y] = RD.xy(tile);
+    const k = sc.scrollWidth / RD.view.w;
+    sc.scrollTo({ left: (M + x * T + T / 2) * k - sc.clientWidth / 2, top: (M + y * T + T / 2) * k - sc.clientHeight / 2, behavior: smooth ? 'smooth' : 'auto' });
+  }
   // zoom in or out, keeping the same point of the map under the middle of the board
   function setZoom(z, fx, fy) {
+    ui.autoZoom = false;
     z = Math.max(0, Math.min(ZOOMS.length - 1, z));
     if (z === (ui.zoom || 0)) return;
     const sc = $('board-scroll');
@@ -1489,7 +1848,7 @@
   }
   // while zoomed during a raid, keep the leading hero on screen
   function cameraFollow() {
-    if (!ui.zoom || !G.R || !ui.follow) return;
+    if (!$('board-wrap').classList.contains('zoomed') || !G.R || !ui.follow) return;
     const live = G.R.heroes.filter((h) => RD.heroAlive(h) && RD.fl(h.tile) === RD.view.floor);
     if (!live.length) return;
     const lead = live.reduce((a, h) => (RD.tdist(h.tile, G.entrance) > RD.tdist(a.tile, G.entrance) ? h : a), live[0]);
@@ -1515,20 +1874,26 @@
     cv.addEventListener('pointerleave', () => {
       RD.view.hover = -1;
       ui.previewError = null;
+      ui.trouble = null;
       if (ui.hoverIt) { ui.hoverIt = null; renderDetail(); }
       if (G && G.phase === 'build') $('hint').textContent = 'Pick a blueprint, then click the map.';
     });
-    cv.addEventListener('pointerdown', (e) => { ui.touch = e.pointerType !== 'mouse'; });
+    // touch or mouse: decided by whatever pressed last, anywhere on the page
+    document.addEventListener('pointerdown', (e) => { ui.touch = e.pointerType !== 'mouse'; }, { capture: true, passive: true });
     // touch: the first tap shows what would happen (details, range, outline), the second tap does it
     cv.addEventListener('click', (e) => {
+      if (ui.focus && ui.drawer) { setDrawer(false); return; } // a tap beside the open drawer just closes it
       const i = canvasTile(e);
-      const aiming = G.phase === 'build' || (G.phase === 'raid' && !!ui.power);
+      // building asks for a second tap; a raid power fires on the first (choosing the power was the first tap,
+      // and heroes move between taps)
+      const aiming = G.phase === 'build' && ui.tool !== 'inspect';
       if (ui.touch && aiming && i >= 0 && ui.armed !== i) {
         ui.armed = i;
         RD.view.hover = i;
         ui.hoverIt = null;
         preview(i);
         if (G.phase === 'raid') toast(`Tap again to use ${RD.POWERS[ui.power].name} here.`, true);
+        else toast(ui.previewError ? ui.previewError : `Tap again to ${tapVerb(i)}.`, !ui.previewError);
         return;
       }
       ui.armed = -1;
@@ -1567,10 +1932,20 @@
     $('ledger-close').onclick = () => drawer(false);
     $('coach-skip').onclick = endTutorial;
     $('dispatch-close').onclick = hideDispatch;
+    $('scry').onclick = scry;
+    $('undo').onclick = undo;
+    $('focus-btn').onclick = () => setFocus(!ui.focus);
+    $('drawer-btn').onclick = () => setDrawer(!ui.drawer);
+    $('toolchip').onclick = () => setDrawer(true);
+    // leaving the browser's full screen (back gesture, Esc) leaves the stripped layout too
+    document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && ui.focus && ui.fsWas) setFocus(false); ui.fsWas = !!document.fullscreenElement; });
+    $('layouts').onclick = showLayouts;
+    $('forecast-close').onclick = () => { $('forecast').hidden = true; ui.showHeat = false; if (!ui.tut) RD.view.marks = []; };
     const soundBtn = $('sound-btn');
     const setSound = (v, keep) => { RD.audio.setOn(v); soundBtn.setAttribute('aria-pressed', v); if (keep) store.set('sound', v); };
     soundBtn.onclick = () => setSound(!RD.audio.isOn(), true);
     setSound(store.get('sound', true) && !P.muted(), false);
+    if (store.get('focus', false)) setTimeout(() => setFocus(true), 0); // the layout comes back; real full screen needs a tap
     P.onMute = (m) => setSound(!m && store.get('sound', true), false);
     // browsers only allow sound after a gesture
     const unlock = () => RD.audio.unlock();
@@ -1599,6 +1974,7 @@
     window.addEventListener('resize', () => { if (G) fit(); });
     document.addEventListener('keydown', (e) => {
       if (isOpen() || e.target.tagName === 'INPUT') return;
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); return; }
       if (e.key === ' ') {
         e.preventDefault();
         if (G.phase === 'build') startRaid();
@@ -1671,11 +2047,15 @@
     ui.challenge = readChallenge();
     touchStreak();
     let loaded = null;
-    try { loaded = RD.loadGame(store.get('save', null)); } catch (e) { loaded = null; }
-    if (!loaded) store.del('save');
+    // one-time move of the old single save into slot 1
+    const old = store.get('save', null);
+    if (old && !store.get('save.0', null)) { store.set('save.0', { ...old, savedAt: Date.now() }); store.del('save'); }
+    ui.slot = Math.max(0, Math.min(SLOTS - 1, store.get('slot', 0) | 0));
+    try { loaded = RD.loadGame(store.get(slotKey(), null)); } catch (e) { loaded = null; }
+    if (!loaded) store.del(slotKey());
     else if (loaded.diff) ui.diff = loaded.diff;
     // someone who has never played goes straight into the guided first night; the menu is one button away
-    const fresh = !loaded && !meta().runs && store.get('tut', null) !== 'done' && !ui.challenge;
+    const fresh = !loaded && !meta().runs && store.get('tut', null) !== 'done' && !ui.challenge && ![0, 1, 2].some((k) => slotInfo(k));
     if (fresh) begin((Math.random() * 1e6) | 0, ui.mode, ui.diff, []);
     else {
       newGame((Math.random() * 1e6) | 0, loaded, ui.diff);

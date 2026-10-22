@@ -852,3 +852,213 @@ kbd {
 .st.lvls tr:first-child th { color: var(--gold); font-family: var(--f-mono); }
 .detail #piece-more { display: block; margin-top: 8px; }
 .minion .st { width: auto; }
+
+/* how to play: looping scenes */
+.lessons { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.lesson { border: 1px solid var(--rule); background: var(--void); padding: 8px; display: grid; gap: 8px; align-content: start; }
+.lesson canvas { width: 100%; height: auto; display: block; background: var(--void); border: 1px solid #2a2230; }
+.lesson b { color: var(--gold); }
+.lesson p { margin: 4px 0 6px; font-size: var(--s-sm); line-height: 1.4; }
+.lesson .ghost.small { margin-top: 0; }
+
+/* "show me": a pulsing spotlight on the real control */
+.spot { outline: 2px solid var(--gold) !important; outline-offset: 3px; animation: spot 0.7s ease-in-out infinite alternate; position: relative; z-index: 6; }
+@keyframes spot { from { box-shadow: 0 0 0 0 rgba(227, 176, 75, 0.0); } to { box-shadow: 0 0 18px 4px rgba(227, 176, 75, 0.55); } }
+
+/* scrying: the rehearsed raid */
+.forecast {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: min(340px, calc(100% - 20px));
+  max-height: calc(100% - 70px);
+  overflow: auto;
+  background: rgba(13, 11, 16, 0.95);
+  border: 1px solid var(--steel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  padding: 10px 12px;
+  z-index: 3;
+  font-size: var(--s-sm);
+}
+.forecast header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.forecast header .eyebrow { display: block; font-family: var(--f-mono); font-size: var(--s-xs); letter-spacing: 0.14em; text-transform: uppercase; color: var(--steel); }
+.forecast header .ghost.small { margin-top: 0; }
+.forecast .big { margin: 8px 0 2px; font-size: var(--s-md); color: var(--bone); font-weight: 700; }
+.forecast .note.warn { color: var(--gold); }
+.forecast .heat { display: flex; gap: 6px; align-items: center; margin-top: 8px; color: var(--ash); font-size: var(--s-xs); }
+#scry .m { font-family: var(--f-mono); color: var(--malice-hi); margin-left: 4px; }
+
+/* the night's damage, piece by piece */
+.dmg { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 4px; }
+.dmg li { display: grid; grid-template-columns: auto minmax(90px, 1.2fr) 2fr auto; gap: 8px; align-items: center; font-size: var(--s-sm); }
+.forecast .dmg li { grid-template-columns: minmax(80px, 1.2fr) 1.4fr auto; }
+.dmg canvas { background: #2c2530; }
+.dmg .nm small { color: var(--ash); font-family: var(--f-mono); font-size: var(--s-xs); }
+.dmg .bar { height: 8px; background: #241d28; }
+.dmg .bar i { display: block; height: 100%; background: var(--malice); }
+.dmg .v { font-family: var(--f-mono); font-size: var(--s-xs); color: var(--bone); white-space: nowrap; }
+.combo-line b { color: #ffd34d; }
+.tips { list-style: none; margin: 8px 0 4px; padding: 0; display: grid; gap: 6px; }
+.tips li { border-left: 3px solid var(--gold); background: rgba(227, 176, 75, 0.07); padding: 6px 10px; font-size: var(--s-sm); }
+.tips li::before { content: 'Fix · '; color: var(--gold); font-family: var(--f-mono); font-size: var(--s-xs); letter-spacing: 0.1em; text-transform: uppercase; }
+
+/* many floors: the tabs take a scrolling row of their own, and drop their labels past five */
+.stagebar { flex-wrap: wrap; }
+.floors.many { order: 3; flex: 1 1 100%; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; padding-bottom: 2px; }
+.floors.compact .fl-word, .floors.compact small:not(.n) { display: none; }
+.floors.compact .floor { padding: 3px 8px; }
+
+/* the omen yields room to the view toggle instead of pushing it onto a row of its own */
+.omen { flex: 1 1 0; }
+/* short screens (phones held sideways): every row of controls costs map */
+@media (max-height: 560px) {
+  .build-actions .hint { display: none; }
+  #scry .long { display: none; }
+  .build-actions { justify-content: flex-end; flex-wrap: nowrap; }
+}
+@media (max-height: 560px) {
+  .floors.many { order: 0; flex: 1 1 0; }
+  .omen { flex: 0 1 auto; max-width: 28%; }
+  .omen span { display: none; }
+}
+@media (max-height: 560px) {
+  .raid-actions { flex-wrap: nowrap; gap: 6px; }
+  .powers { flex-wrap: nowrap; overflow-x: auto; min-width: 0; flex: 1 1 0; scrollbar-width: thin; padding-bottom: 2px; }
+  .power { flex: none; }
+  .voice { max-width: min(260px, calc(100% - 70px)); font-size: var(--s-xs); padding: 4px 8px 4px 4px; gap: 6px; }
+  .voice .core { width: 20px; height: 20px; }
+  .forecast, .dispatch { max-height: calc(100% - 20px); font-size: var(--s-xs); }
+}
+
+/* saved layouts */
+.layouts { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.layouts li { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--rule); background: var(--void); padding: 8px 10px; flex-wrap: wrap; }
+.layouts li b { display: block; color: var(--gold); }
+.layouts li span { color: var(--ash); font-size: var(--s-sm); }
+.layouts .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.layouts .ghost.small, .layouts .go.small { margin-top: 0; }
+.go.small { padding: 5px 12px; font-size: var(--s-sm); }
+.go.small .m { color: #fff3cf; font-family: var(--f-mono); }
+#undo[disabled] { opacity: 0.4; cursor: default; }
+.note.fallen { color: var(--malice-hi); }
+.tips.ghosts li { border-left-color: var(--violet, #b38be0); background: rgba(179, 139, 224, 0.08); }
+.tips.ghosts li::before { content: 'Ghost · '; color: var(--violet, #b38be0); }
+@media (max-height: 560px) { #layouts, #undo { padding-left: 8px; padding-right: 8px; } }
+
+/* save slots on the start screen */
+.slots { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 6px; }
+.slot { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--rule); background: var(--void); padding: 8px 10px; cursor: pointer; flex-wrap: wrap; }
+.slot:hover { border-color: var(--ash); }
+.slot.on { border-color: var(--gold); background: rgba(227, 176, 75, 0.06); }
+.slot b { display: block; color: var(--gold); font-size: var(--s-sm); }
+.slot.empty b { color: var(--ash); }
+.slot span { color: var(--ash); font-size: var(--s-xs); font-family: var(--f-mono); }
+.slot .acts { display: flex; gap: 6px; font-family: inherit; }
+.slot .ghost.small, .slot .go.small { margin-top: 0; }
+.slot .ghost.small.armed { border-color: var(--malice); color: var(--malice-hi); }
+
+/* ------------------------------------------------------------ phones held sideways */
+@media (max-height: 500px) {
+  /* the tutorial is a slim banner along the top, not a box over the map */
+  .coach { top: 4px; left: 4px; right: 4px; transform: none; width: auto; padding: 5px 8px; font-size: var(--s-xs); display: flex; gap: 8px; align-items: center; }
+  .coach p { margin: 0; flex: 1; line-height: 1.3; }
+  .coach .ghost.small { padding: 2px 6px; white-space: nowrap; }
+  /* the piece panel: name, price and a line of description; the full numbers are one tap away (Full details / Info) */
+  .detail { font-size: var(--s-xs); max-height: 64px; overflow: hidden; position: relative; }
+  .detail .st, .detail .foot { display: none; }
+  .detail #piece-more { position: absolute; right: 0; bottom: 0; margin: 0; padding: 1px 6px; font-size: 0.65rem; background: var(--slab); }
+  .blueprints .scroll > h3:first-child { margin-top: 0; }
+  .tools .tool { min-height: 38px; }
+  .card { min-height: 38px; }
+  .dispatch { width: min(300px, calc(100% - 12px)); right: 6px; top: 6px; padding: 6px 8px; }
+  .dispatch li small { display: none; }
+  .zoom button { width: 34px; height: 34px; }
+  .toast { bottom: 8px; font-size: var(--s-xs); padding: 4px 10px; }
+}
+@media (max-height: 500px) {
+  .voice { max-width: calc(48% - 10px); }
+  .dispatch { width: 50%; max-width: 300px; max-height: calc(100% - 16px); }
+  .dispatch .note { display: none; }
+  .dispatch ul { margin-top: 4px; gap: 3px; }
+  .dispatch header .eyebrow { font-size: 0.6rem; }
+}
+
+/* the sheet never grows past the screen: a long row inside (the guide's tabs) scrolls instead of pushing it */
+.modal { grid-template-columns: minmax(0, 1fr); }
+.sheet { min-width: 0; max-width: 100%; justify-self: center; }
+@media (max-height: 500px) {
+  .modal { padding: 6px; }
+  .sheet { padding: 10px 12px; }
+  .sheet h2 { font-size: 1.6rem; margin: 0 0 4px; }
+  .guide-body { max-height: calc(100vh - 150px); }
+  .lessons { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .lesson p { font-size: var(--s-xs); }
+}
+
+/* the rotate prompt shows what to do */
+.rotate .phone { display: block; width: 38px; height: 64px; margin: 0 auto 18px; border: 3px solid var(--gold); border-radius: 7px; position: relative; animation: turn 2.4s ease-in-out infinite; }
+.rotate .phone::after { content: ''; position: absolute; left: 50%; bottom: 4px; width: 8px; height: 3px; margin-left: -4px; background: var(--gold); border-radius: 2px; }
+.rotate p { margin: 0; }
+.rotate .note { margin-top: 8px; }
+@keyframes turn { 0%, 25% { transform: rotate(0); } 55%, 100% { transform: rotate(-90deg); } }
+/* small screens: nothing can be built during a raid, so the map takes the blueprint panel's room */
+@media (max-width: 900px), (max-height: 560px) {
+  .app.raiding .layout { grid-template-columns: minmax(0, 1fr); }
+  .app.raiding .blueprints { display: none; }
+}
+@media (max-height: 500px) {
+  .voice { max-width: min(240px, calc(40% - 10px)); opacity: 0.92; }
+}
+
+/* ------------------------------------------------------------ full screen (focus mode) */
+#drawer-btn, .toolchip { display: none; }
+.app.focus .logo,
+.app.focus .stats .rating,
+.app.focus .stats .steel,
+.app.focus #guide-btn,
+.app.focus #ledger-btn,
+.app.focus #sound-btn,
+.app.focus .omen span,
+.app.focus .omen .twist,
+.app.focus .omen .tag,
+.app.focus .stagebar > .seg,
+.app.focus #layouts,
+.app.focus #scry,
+.app.focus .build-actions .hint { display: none; }
+.app.focus .layout { grid-template-columns: minmax(0, 1fr); }
+.app.focus #drawer-btn { display: inline-block; }
+.app.focus .build-actions { justify-content: flex-end; flex-wrap: nowrap; }
+/* the blueprints slide in from the left, over the map */
+.app.focus .blueprints {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(250px, 72vw);
+  z-index: 9;
+  transform: translateX(-105%);
+  transition: transform 0.2s ease-out;
+  box-shadow: 20px 0 40px rgba(0, 0, 0, 0.5);
+}
+.app.focus.drawer .blueprints { transform: none; }
+.app.focus.raiding .blueprints { display: none; }
+/* what you're placing, on the map; tap it to change */
+.app.focus .toolchip:not([hidden]) {
+  display: inline-flex;
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 3;
+  align-items: center;
+  gap: 6px;
+  background: rgba(13, 11, 16, 0.92);
+  border: 1px solid var(--gold);
+  color: var(--bone);
+  font-size: var(--s-xs);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.toolchip .m { color: var(--malice-hi); font-family: var(--f-mono); }
+.toolchip .chg { color: var(--gold); text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.6rem; }
+.app.focus .stats > div { padding: 1px 6px 2px; }
+.app.focus .ledger { display: none; }

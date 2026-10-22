@@ -142,7 +142,18 @@
     legends: { name: 'Age of Legends', desc: 'Every party that can bring a legend does.' },
     glass: { name: 'Glass Fangs', desc: 'Monsters hit 50% harder but have 30% less health.' },
     rush: { name: 'Rush', desc: 'Raids are 40% shorter and heroes move 20% faster.' },
+    mortal: { name: 'Mortal Monsters', desc: 'Hardcore. A monster that dies in a raid is gone for good, bosses and hordes included, and you can keep at most 8 monsters plus 4 per floor. Summons and the raised dead don’t count.' },
   };
+  RD.monsterCap = (G) => 8 + 4 * G.floors; // above a typical build (10–18 by night 30); the losses are the hardcore part
+
+  // Ghosts: a legend who dies in your dungeon may come back, in the room where they fell.
+  RD.GHOSTS = {
+    haunt: { name: 'Haunting', desc: 'Heroes who come within 2 tiles of it lose their nerve for 5 seconds and run at the first scratch.' },
+    whisper: { name: 'Whispering', desc: 'Every night it whispers to the guild: a trap that is not there, or a real one forgotten. Their map gets a little more wrong.' },
+    vengeful: { name: 'Vengeful', desc: 'It rises every raid as a spectre at the rank it had in life and fights for you. Kill it and it is laid to rest.' },
+  };
+  RD.GHOST_NIGHTS = 12; // a ghost fades this many nights after its death
+  RD.GHOST_MAX = 3;
   RD.twisted = (G, k) => !!(G.twists && G.twists.includes(k));
 
   // a run's score: nights held, heroes slain, legends, and a bonus for winning; twists multiply it
@@ -187,7 +198,7 @@
     siphon: { name: 'Soul Siphon', tier: 6, cost: 250, kind: 'trap', place: 'floor', hidden: true, sense: 'magic', cat: 'trap', dmg: 8, pct: 0.3, rearm: 9,
       desc: 'Tears away 30% of the victim’s remaining health, however strong they are. A torn soul only tears again once the hero is healed back above 80% of their health; until then siphons do their flat damage.' },
     abyss: { name: 'Abyss Gate', tier: 7, cost: 400, kind: 'trap', place: 'floor', hidden: true, sense: 'illusion', cat: 'illusion', dmg: 14, rearm: 12,
-      desc: 'An illusion of open floor. Whoever steps through is thrown back out of the front gate.' },
+      desc: 'An illusion of open floor. Whoever steps through on the way in is thrown back out to the front gate and has to walk it all again; anyone trying to leave is thrown back into the deepest corner of the floor instead.' },
     // wall pieces
     darts: { name: 'Dart Slit', tier: 0, cost: 24, kind: 'turret', place: 'wall', cat: 'turret', dmg: 9, rate: 1.1, range: 4,
       desc: 'Set into rock beside a corridor. Shoots down straight passages up to 4 tiles away. No two side by side. Rogues who have felt it can jam it for 12s.' },
@@ -198,6 +209,10 @@
       desc: 'Holds a corridor shut until broken. Knights batter it fast, rogues pick the lock.' },
     vault: { name: 'Runed Vault Door', tier: 4, cost: 90, kind: 'door', place: 'floor', hp: 160, nopick: true,
       desc: 'No lock to pick. It has to be broken, and it takes a beating.' },
+    dropgate: { name: 'Drop Gate', tier: 2, cost: 40, kind: 'door', place: 'floor', hp: 200, oneway: true, tags: ['mech'],
+      desc: 'Stands open until the whole party has walked through, then crashes down behind the last of them for the rest of the night. Whoever is inside has to find another road out, and the rest of the party another road in. Pair it with an Exit Gate so the way out is the road you chose.' },
+    exitgate: { name: 'Exit Gate', tier: 2, cost: 30, kind: 'door', place: 'floor', hp: 200, exit: true, tags: ['mech'],
+      desc: 'Shut when the raid begins. It grinds open the moment a Drop Gate on the same floor falls, so heroes who came in one way have to leave by another, past whatever waits there. Needs a Drop Gate on its floor.' },
     // monsters
     goblin: { name: 'Goblin', tier: 0, cost: 12, kind: 'monster', place: 'floor', cat: 'monster', hp: 40, dmg: 7, rate: 0.7, speed: 2.6, leash: 3,
       desc: 'Quick, cheap and cowardly. Better in a pack.' },
@@ -292,12 +307,18 @@
     // summoned only
     imp: { name: 'Imp', tier: 6, cost: 0, kind: 'monster', summonOnly: true, place: 'floor', cat: 'monster', hp: 60, dmg: 10, rate: 0.7, speed: 2.8, leash: 5,
       desc: 'A demon lord’s servant.' },
+    // the vengeful ghost of a legend, risen each night in the room where they fell
+    spectre: { name: 'Spectre', tier: 6, cost: 0, kind: 'monster', summonOnly: true, place: 'floor', cat: 'illusion', hp: 150, dmg: 18, rate: 1.0, speed: 2.4, leash: 3, undead: true, drain: 0.3,
+      desc: 'The ghost of a legend who died in your dungeon, guarding the room where they fell. It fights at the rank they had in life.' },
+    // bait: a chest of real coin where you want heroes to stop
+    bait: { name: 'Bait Chest', tier: 1, cost: 15, kind: 'bait', place: 'floor', value: 20,
+      desc: 'A chest of real coin, left where you want heroes to stop. Greedy heroes, and strike teams passing within 4 tiles, go out of their way for it and stand still for 2 seconds to open it. Kill them before they leave: whoever carries it out takes its gold from your hoard.' },
   };
   for (const k in RD.ITEMS) RD.ITEMS[k].id = k;
 
   // Tags tie pieces to floor themes and to the heroes who counter them.
   RD.TAGS = {
-    undead: ['skeleton', 'wraith', 'lich', 'vampire', 'dullahan', 'vampirelord'],
+    undead: ['skeleton', 'wraith', 'lich', 'vampire', 'dullahan', 'vampirelord', 'spectre'],
     fire: ['rune', 'dragon', 'demonlord', 'chimera', 'imp'],
     frost: ['frost', 'gravity'],
     poison: ['vent', 'poison', 'slime', 'spider', 'basilisk'],
@@ -330,7 +351,7 @@
     { id: 'walls', name: 'Walls & doors', kinds: ['turret', 'door'] },
     { id: 'monsters', name: 'Monsters', kinds: ['monster'], boss: false, den: false },
     { id: 'hordes', name: 'Hordes', kinds: ['monster'], boss: false, den: true },
-    { id: 'rooms', name: 'Rooms & seals', kinds: ['totem', 'seal'] },
+    { id: 'rooms', name: 'Rooms, seals & bait', kinds: ['totem', 'seal', 'bait'] },
     { id: 'bosses', name: 'Bosses', kinds: ['monster'], boss: true },
   ];
   RD.inGroup = (g, k) => {
@@ -542,6 +563,7 @@
     perfect: ['Not a single survivor. The guild learns nothing.', 'Flawless. They walked in as heroes and stayed as decor.'],
     robbed: ['They took {g} gold. I want it back with interest.', 'My hoard is lighter. My mood is darker.'],
     thin: ['The hoard is getting thin, keeper. Very thin.'],
+    ghost: ['{n} {t} will not rest. Good.', 'Death was not the end for {n}. Not here.', 'Welcome back, {n}. You work for me now.'],
     combo: ['{c}! Beautiful.', 'Now THAT is craftsmanship.', '{c}. I felt that one.', 'Did you see that? {c}!'],
     power: {
       tremor: ['Feel that?'], douse: ['Lights out.'], mire: ['Stay a while.'], lure: ['Ooh, shiny.'], collapse: ['Mind your heads.'],

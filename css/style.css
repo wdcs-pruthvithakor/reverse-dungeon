@@ -901,3 +901,58 @@ kbd {
 .tips { list-style: none; margin: 8px 0 4px; padding: 0; display: grid; gap: 6px; }
 .tips li { border-left: 3px solid var(--gold); background: rgba(227, 176, 75, 0.07); padding: 6px 10px; font-size: var(--s-sm); }
 .tips li::before { content: 'Fix · '; color: var(--gold); font-family: var(--f-mono); font-size: var(--s-xs); letter-spacing: 0.1em; text-transform: uppercase; }
+
+/* many floors: the tabs take a scrolling row of their own, and drop their labels past five */
+.stagebar { flex-wrap: wrap; }
+.floors.many { order: 3; flex: 1 1 100%; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; padding-bottom: 2px; }
+.floors.compact .fl-word, .floors.compact small:not(.n) { display: none; }
+.floors.compact .floor { padding: 3px 8px; }
+
+/* the omen yields room to the view toggle instead of pushing it onto a row of its own */
+.omen { flex: 1 1 0; }
+/* short screens (phones held sideways): every row of controls costs map */
+@media (max-height: 560px) {
+  .build-actions .hint { display: none; }
+  #scry .long { display: none; }
+  .build-actions { justify-content: flex-end; flex-wrap: nowrap; }
+}
+@media (max-height: 560px) {
+  .floors.many { order: 0; flex: 1 1 0; }
+  .omen { flex: 0 1 auto; max-width: 28%; }
+  .omen span { display: none; }
+}
+@media (max-height: 560px) {
+  .raid-actions { flex-wrap: nowrap; gap: 6px; }
+  .powers { flex-wrap: nowrap; overflow-x: auto; min-width: 0; flex: 1 1 0; scrollbar-width: thin; padding-bottom: 2px; }
+  .power { flex: none; }
+  .voice { max-width: min(260px, calc(100% - 70px)); font-size: var(--s-xs); padding: 4px 8px 4px 4px; gap: 6px; }
+  .voice .core { width: 20px; height: 20px; }
+  .forecast, .dispatch { max-height: calc(100% - 20px); font-size: var(--s-xs); }
+}
+
+/* saved layouts */
+.layouts { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.layouts li { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--rule); background: var(--void); padding: 8px 10px; flex-wrap: wrap; }
+.layouts li b { display: block; color: var(--gold); }
+.layouts li span { color: var(--ash); font-size: var(--s-sm); }
+.layouts .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.layouts .ghost.small, .layouts .go.small { margin-top: 0; }
+.go.small { padding: 5px 12px; font-size: var(--s-sm); }
+.go.small .m { color: #fff3cf; font-family: var(--f-mono); }
+#undo[disabled] { opacity: 0.4; cursor: default; }
+.note.fallen { color: var(--malice-hi); }
+.tips.ghosts li { border-left-color: var(--violet, #b38be0); background: rgba(179, 139, 224, 0.08); }
+.tips.ghosts li::before { content: 'Ghost · '; color: var(--violet, #b38be0); }
+@media (max-height: 560px) { #layouts, #undo { padding-left: 8px; padding-right: 8px; } }
+
+/* save slots on the start screen */
+.slots { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 6px; }
+.slot { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--rule); background: var(--void); padding: 8px 10px; cursor: pointer; flex-wrap: wrap; }
+.slot:hover { border-color: var(--ash); }
+.slot.on { border-color: var(--gold); background: rgba(227, 176, 75, 0.06); }
+.slot b { display: block; color: var(--gold); font-size: var(--s-sm); }
+.slot.empty b { color: var(--ash); }
+.slot span { color: var(--ash); font-size: var(--s-xs); font-family: var(--f-mono); }
+.slot .acts { display: flex; gap: 6px; font-family: inherit; }
+.slot .ghost.small, .slot .go.small { margin-top: 0; }
+.slot .ghost.small.armed { border-color: var(--malice); color: var(--malice-hi); }

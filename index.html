@@ -7,8 +7,8 @@
 <meta name="description" content="A dungeon-builder where you play the dungeon. Heroes learn your traps and tell the guild, so you rebuild between raids.">
 <meta name="theme-color" content="#0d0b10">
 <link rel="preload" href="fonts/AlegreyaSans-400.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="fonts/fonts.css?v=33">
-<link rel="stylesheet" href="css/style.css?v=33">
+<link rel="stylesheet" href="fonts/fonts.css?v=46">
+<link rel="stylesheet" href="css/style.css?v=46">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0b10'/%3E%3Cpath d='M6 28V12a10 10 0 0 1 20 0v16' fill='none' stroke='%23c43c68' stroke-width='3'/%3E%3Ccircle cx='16' cy='21' r='3' fill='%23e3b04b'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -78,6 +78,8 @@
         <div class="build-actions" id="build-actions">
           <p class="hint" id="hint">Pick a blueprint, then click the map.</p>
           <button type="button" class="ghost" id="cancel" hidden>Cancel</button>
+          <button type="button" class="ghost" id="undo" title="Undo the last build action (Ctrl+Z). Everything can be undone until the gate opens." disabled>Undo</button>
+          <button type="button" class="ghost" id="layouts" title="Save this floor's layout, or rebuild a saved one paying only for what differs">Layouts</button>
           <button type="button" class="ghost" id="scry" title="Rehearse tonight's raid against your dungeon as it stands: where the heroes will walk, how many should fall, which pieces will do the work">Scry the raid <span class="m" id="scry-cost"></span></button>
           <button type="button" class="go" id="go">Open the gate <kbd>Space</kbd></button>
         </div>
@@ -122,13 +124,13 @@
   <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"></div>
 </div>
 
-<script src="js/data.js?v=33"></script>
-<script src="js/world.js?v=33"></script>
-<script src="js/sim.js?v=33"></script>
-<script src="js/render.js?v=33"></script>
-<script src="js/audio.js?v=33"></script>
-<script src="js/portal.js?v=33"></script>
-<script src="js/howto.js?v=33"></script>
-<script src="js/ui.js?v=33"></script>
+<script src="js/data.js?v=46"></script>
+<script src="js/world.js?v=46"></script>
+<script src="js/sim.js?v=46"></script>
+<script src="js/render.js?v=46"></script>
+<script src="js/audio.js?v=46"></script>
+<script src="js/portal.js?v=46"></script>
+<script src="js/howto.js?v=46"></script>
+<script src="js/ui.js?v=46"></script>
 </body>
 </html>

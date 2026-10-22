@@ -130,6 +130,45 @@
     return s + base;
   };
 
+  // One-way roads. A Drop Gate is open when the raid begins and falls once a hero walks through; an Exit Gate
+  // is shut when the raid begins and opens when a Drop Gate on its floor falls. Both moments must stay fair:
+  // at the start the hoard can be reached with every exit shut, and once the gates have dropped every corridor
+  // can be reached, so nobody is ever walled in. `plan` describes a change that has not happened yet:
+  // { add: [tile, type], remove: tile, fill: tile }.
+  RD.gatesProblem = function (G, plan) {
+    plan = plan || {};
+    const gates = [...G.items.values()].filter((it) => it.tile !== plan.remove).map((it) => [it.tile, it.type]);
+    if (plan.add) gates.push(plan.add);
+    const drops = gates.filter(([, k]) => RD.ITEMS[k].oneway), exits = gates.filter(([, k]) => RD.ITEMS[k].exit);
+    RD.gateTrouble = null; // the tiles a refusal is about, for the map to show
+    if (!drops.length && !exits.length) return null;
+    const M = G.floors * N;
+    const reach = (t) => {
+      const seen = new Uint8Array(M);
+      seen[G.entrance] = 1;
+      const q = [G.entrance];
+      for (let h = 0; h < q.length; h++) for (const v of RD.adj(G, q[h])) if (v < M && !seen[v] && t[v] === 1) { seen[v] = 1; q.push(v); }
+      return seen;
+    };
+    const base = G.tiles.slice();
+    if (plan.fill != null) base[plan.fill] = 0;
+    // the raid begins: exits shut
+    const a = base.slice();
+    for (const [j] of exits) a[j] = 0;
+    if (!reach(a)[G.hoard]) { RD.gateTrouble = [G.hoard]; return 'With the Exit Gates shut, heroes could not reach the hoard. The Drop Gate has to be on the road in.'; }
+    // the gates have dropped: entries shut, exits open. Nothing heroes can reach now may be cut off then.
+    // (Corners already out of reach, say a pocket dug into solid rock, don't count.)
+    const now = reach(base);
+    const b = base.slice();
+    for (const [j] of drops) b[j] = 0;
+    const seen = reach(b);
+    const lost = [];
+    for (let j = 0; j < M; j++) if (b[j] === 1 && now[j] && !seen[j]) lost.push(j);
+    if (lost.length) { RD.gateTrouble = lost; return `Once the Drop Gate falls, ${lost.length} corridor tile${lost.length > 1 ? 's' : ''} (ringed in red) would have no road out. Put an Exit Gate or an open corridor on another way round.`; }
+    return null;
+  };
+  const hasGates = (G) => [...G.items.values()].some((it) => RD.ITEMS[it.type].oneway || RD.ITEMS[it.type].exit);
+
   RD.reachable = function (G, tiles, from, to) {
     const seen = new Uint8Array(G.floors * N);
     seen[from] = 1;
@@ -394,7 +433,7 @@
       },
       party: [], omen: null, offers: [], sale: null, adapt: '',
       stats: { slain: 0, escaped: 0, goldLost: 0, held: 0, legends: 0, nemeses: 0 },
-      nextId: 1, history: [], debrief: null, R: null,
+      nextId: 1, history: [], debrief: null, R: null, ghosts: [], layouts: {},
     };
     G.malice += 25 * (G.heart.reserves || 0) + (RD.twisted(G, 'thrones') ? 120 : 0);
     G.gold += 20 * (G.heart.vault || 0);
@@ -464,6 +503,7 @@
       guild: { K: packKnow(g.K, M), causes: g.causes, pressure: g.pressure, threat: g.threat, wariness: g.wariness, blackout: g.blackout || 0, renown: g.renown || 0, veterans: g.veterans, rumors: g.rumors },
       party: pending ? [] : G.party, omen: G.omen && G.omen.id, offers: G.offers, sale: G.sale, adapt: G.adapt,
       stats: G.stats, nextId: G.nextId, history: G.history.map((h) => ({ ...h, log: h.log.slice(0, 120) })),
+      ghosts: (G.ghosts || []).map(({ ex, ...g }) => g), layouts: G.layouts || {},
     };
   };
 
@@ -492,6 +532,7 @@
       party: o.party, omen: RD.OMENS.find((m) => m.id === o.omen) || RD.OMENS[0],
       offers: (o.offers || []).filter((t) => RD.ITEMS[t]), sale: o.sale, adapt: o.adapt,
       stats: { ...o.stats, legends: o.stats.legends || 0, nemeses: o.stats.nemeses || 0 }, nextId: o.nextId, history: o.history || [], debrief: null, R: null,
+      ghosts: (o.ghosts || []).filter((g) => g && g.tile != null), layouts: o.layouts || {},
     };
     linkFloors(G);
     RD.G = G;
@@ -512,6 +553,8 @@
   RD.beginBuild = function (G, first, keepOmen) {
     G.phase = 'build';
     G.R = null;
+    // ghosts fade in time
+    G.ghosts = (G.ghosts || []).filter((gh) => !gh.gone && G.raid <= gh.fade);
     for (const it of G.items.values()) freshItem(it);
     const rng = G.rng;
     if (!keepOmen) {
@@ -645,9 +688,15 @@
       const t = G.tiles.slice();
       t[i] = 0;
       if (!RD.reachable(G, t, G.entrance, G.hoard)) return 'That would seal the hoard off.';
+      if (hasGates(G)) { const p = RD.gatesProblem(G, { fill: i }); if (p) return p; }
       return afford(G, tool);
     }
-    if (tool === 'sell') return it ? null : 'Nothing here to sell.';
+    if (tool === 'sell') {
+      if (!it) return 'Nothing here to sell.';
+      // an exit is someone's only way out once the drop gates fall
+      if (RD.ITEMS[it.type].exit) { const p = RD.gatesProblem(G, { remove: i }); if (p) return 'Selling this Exit Gate would wall heroes in once the Drop Gate falls.'; }
+      return null;
+    }
     if (tool === 'upgrade') {
       if (!it) return 'Pick a placed piece to level up.';
       if ((it.lv || 1) >= RD.MAX_LEVEL) return `Already Lv${RD.MAX_LEVEL}, the most a ${RD.TIERS[RD.ITEMS[it.type].tier]}-rank piece can reach.`;
@@ -668,6 +717,10 @@
     const d = RD.ITEMS[type];
     if (tool !== 'move' && d.tier > RD.unlocked(G)) return `${RD.TIERS[d.tier]}-rank pieces unlock on night ${RD.TIER_UNLOCK[d.tier]}.`;
     if (it && i !== from) return 'Something already stands here.';
+    if (tool !== 'move' && d.kind === 'monster' && RD.twisted(G, 'mortal')) {
+      const n = [...G.items.values()].filter((o) => RD.ITEMS[o.type].kind === 'monster').length;
+      if (n >= RD.monsterCap(G)) return `Mortal Monsters: you can keep ${RD.monsterCap(G)} monsters (8 plus 4 per floor). Sell one first.`;
+    }
     if (d.kind === 'seal') {
       const boss = [...G.items.values()].some((o) => RD.ITEMS[o.type].boss && fl(o.tile) === fl(i));
       if (!boss) return 'A boss seal needs a boss on the same floor.';
@@ -690,8 +743,13 @@
       if (!floor) return 'This needs a corridor tile.';
       if (i === G.hoard) return 'The hoard is here.';
       if (special(G, i)) return 'Keep the stairs clear.';
-      if (nearEntrance(G, i)) return 'Leave the threshold clear.';
+      // gates may stand right at the threshold: a road that splits at the gate is the natural place for them
+      if (nearEntrance(G, i) && !d.oneway && !d.exit) return 'Leave the threshold clear.';
     }
+    // one-way roads: an exit needs a Drop Gate on its floor, and both moments of the raid must stay fair
+    if (d.exit && ![...G.items.values()].some((o) => RD.ITEMS[o.type].oneway && fl(o.tile) === fl(i) && o.tile !== from)) return 'An Exit Gate opens when a Drop Gate on the same floor falls. Place a Drop Gate first.';
+    if (d.oneway || d.exit) { const p = RD.gatesProblem(G, { add: [i, type], remove: tool === 'move' ? from : undefined }); if (p) return p; }
+    if (d.oneway && tool === 'move' && fl(i) !== fl(from) && [...G.items.values()].some((o) => RD.ITEMS[o.type].exit && fl(o.tile) === fl(from)) && ![...G.items.values()].some((o) => o.tile !== from && RD.ITEMS[o.type].oneway && fl(o.tile) === fl(from))) return 'The Exit Gates on this floor need this Drop Gate. Move or sell them first.';
     return tool === 'move' ? null : afford(G, tool);
   };
 
@@ -699,6 +757,60 @@
     const c = RD.costOf(G, type);
     return G.malice >= c ? null : `Needs ${c} malice. You have ${G.malice}.`;
   }
+
+  // ---------------------------------------------------------------- saved layouts
+  // A floor's shape and pieces, to rebuild later in one go, paying only for what differs.
+  RD.layoutOf = function (G, f) {
+    const base = f * N;
+    return {
+      night: G.raid,
+      tiles: Array.from(G.tiles.subarray(base, base + N)),
+      items: [...G.items.values()].filter((it) => fl(it.tile) === f).map((it) => [it.tile - base, it.type, it.lv || 1]),
+    };
+  };
+  // Rebuild floor f to match layout L through the normal building rules: sell what doesn't match, dig, fill,
+  // place what's missing (gates before exits, bosses before seals), then level up. Anything the rules or the
+  // purse refuse is skipped and listed.
+  RD.applyLayout = function (G, f, L) {
+    const base = f * N, m0 = G.malice;
+    const out = { sold: 0, dug: 0, filled: 0, placed: 0, levelled: 0, skipped: [] };
+    const want = new Map(L.items.map(([t, type, lv]) => [base + t, { type, lv }]));
+    for (const it of [...G.items.values()]) {
+      if (fl(it.tile) !== f || !G.items.has(it.tile)) continue;
+      const w = want.get(it.tile);
+      if (w && w.type === it.type) continue;
+      if (!RD.check(G, 'sell', it.tile)) { RD.apply(G, 'sell', it.tile); out.sold++; }
+    }
+    for (let k = 0; k < N; k++) if (L.tiles[k] === 1 && G.tiles[base + k] === 0 && !RD.check(G, 'dig', base + k)) { RD.apply(G, 'dig', base + k); out.dug++; }
+    for (let k = 0; k < N; k++) if (L.tiles[k] === 0 && G.tiles[base + k] === 1 && !RD.check(G, 'fill', base + k)) { RD.apply(G, 'fill', base + k); out.filled++; }
+    const order = (type) => { const d = RD.ITEMS[type]; return d.oneway || d.boss ? 0 : d.exit || d.kind === 'seal' ? 2 : 1; };
+    const todo = [...want.entries()].sort((a, b) => order(a[1].type) - order(b[1].type));
+    for (const [tile, w] of todo) {
+      const it = G.items.get(tile);
+      if (it && it.type === w.type) continue;
+      const err = RD.ITEMS[w.type] ? RD.check(G, w.type, tile) : 'gone';
+      if (err) { out.skipped.push(`${RD.ITEMS[w.type] ? RD.ITEMS[w.type].name : w.type} at ${RD.coord(tile)}: ${err}`); continue; }
+      RD.apply(G, w.type, tile);
+      out.placed++;
+    }
+    for (const [tile, w] of want) {
+      const it = G.items.get(tile);
+      if (!it || it.type !== w.type) continue;
+      while ((it.lv || 1) < w.lv && !RD.check(G, 'upgrade', tile)) { RD.apply(G, 'upgrade', tile); out.levelled++; }
+    }
+    out.cost = m0 - G.malice;
+    return out;
+  };
+  // what applyLayout would do, worked out on a copy
+  RD.layoutCost = function (G, f, L) {
+    const keep = RD.G;
+    try {
+      const c = RD.loadGame(JSON.parse(JSON.stringify(RD.saveGame(G))));
+      return RD.applyLayout(c, f, L);
+    } finally { RD.G = keep; }
+  };
+
+  RD.baitValue = (it) => Math.round(RD.ITEMS.bait.value * (1 + 0.5 * ((it.lv || 1) - 1)));
 
   // Selling returns 60% of what was actually spent: the price paid at placement (after any deal,
   // pact or twist discount) plus every level-up. Never the full list price, or discounts would mint malice.
@@ -713,6 +825,10 @@
       const it = G.items.get(i);
       let back = RD.refund(it);
       G.items.delete(i);
+      // exit gates cannot outlive the last drop gate on their floor
+      if (RD.ITEMS[it.type].oneway && ![...G.items.values()].some((o) => RD.ITEMS[o.type].oneway && fl(o.tile) === fl(i))) {
+        for (const o of [...G.items.values()]) if (RD.ITEMS[o.type].exit && fl(o.tile) === fl(i)) { back += RD.refund(o); G.items.delete(o.tile); }
+      }
       // a seal cannot outlive the last boss on its floor
       if (RD.ITEMS[it.type].boss && ![...G.items.values()].some((o) => RD.ITEMS[o.type].boss && fl(o.tile) === fl(i))) {
         for (const o of [...G.items.values()]) if (o.type === 'seal' && fl(o.tile) === fl(i)) { back += RD.refund(o); G.items.delete(o.tile); }
@@ -781,6 +897,7 @@
     if (d.charge) rows.push(['Charge', `knocks down for ${d.charge}s`]);
     if (d.petrify) rows.push(['Petrify', `${Math.round(d.petrify * 100)}% a bite`]);
     if (d.fear) rows.push(['Terror', `${d.fear}s of panic`]);
+    if (d.value) rows.push(['Holds', `${Math.round(d.value * (1 + 0.5 * (lv - 1)))} gold of yours`]);
     if (d.aura) rows.push(['Room', `${d.aura === 'monster' ? 'monsters' : 'traps'} within ${d.auraR} tiles`]);
     return rows;
   };

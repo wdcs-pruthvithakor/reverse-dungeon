@@ -354,6 +354,65 @@
       },
     },
     {
+      id: 'dropgate', title: 'One-way roads: Drop Gate and Exit Gate', show: 'catalog', dur: 7.5, map: ['########', 'G.....$#', '#.####.#', '#......#', '########'],
+      text: 'Make heroes come in one way and leave by another. The Drop Gate is open and the Exit Gate is shut when the raid begins. Once the whole party has walked through the Drop Gate it crashes down and the Exit Gate opens, so the way out is the road you chose, past whatever waits there.',
+      play(s, t) {
+        s.base();
+        const [x, y] = t < 2.6 ? along([[0, 1], [6, 1]], ease(span(t, 0.2, 2.4))) : along([[6, 1], [6, 3], [1, 3], [1, 1], [0, 1]], span(t, 2.8, 7));
+        const shut = t > 0.95;
+        s.piece('dropgate', 2, 1, { closed: shut });
+        s.piece('exitgate', 6, 2, { closed: !shut });
+        if (t > 0.95 && t < 1.8) { s.ring(2, 1, 0.55, P.maliceHi, 1 - span(t, 0.95, 1.8)); s.ring(6, 2, 0.55, P.venom, 1 - span(t, 0.95, 1.8)); }
+        s.piece('skeleton', 3, 3);
+        s.hero('rogue', x, y, { gold: t > 2.6, alpha: t > 6.9 ? 0 : 1, hp: 1 - 0.4 * span(t, 4.4, 5.2) });
+        s.say(!shut ? 'In by the Drop Gate (exit still shut)…' : t < 2.8 ? 'Crash! The Exit Gate opens' : 'Out the long way, past the skeleton', shut ? P.venom : P.bone);
+      },
+    },
+    {
+      id: 'bait', title: 'Bait Chests', show: 'catalog', dur: 6, map: ['########', 'G.....$#', '#..#####', '########'],
+      text: 'A Bait Chest holds real coin. Greedy heroes, and strike teams passing close by, go out of their way for it and stand still for 2 seconds to open it: the perfect moment for an ambush. Kill them before they leave, or whoever carries it out takes its gold from your hoard.',
+      play(s, t) {
+        s.base();
+        const opened = t > 2.6;
+        s.piece('bait', 2, 2, { off: opened });
+        s.piece('skeleton', 1, 2);
+        const [x, y] = t < 1.6 ? along([[0, 1], [2, 1], [2, 2]], ease(span(t, 0.2, 1.6))) : [2, 2];
+        const hit = t > 1.8 && t < 4;
+        s.hero('rogue', x + (hit ? Math.sin(t * 20) * 0.03 : 0), y, { hp: 1 - span(t, 1.8, 4.2), alpha: t > 4.4 ? 0 : 1 });
+        if (t > 1.6 && t < 2.6) s.float(2, 2, 'opening…', P.gold, (t - 1.6));
+        if (t > 4.2) s.float(2, 2, '+malice, gold safe', P.maliceHi, span(t, 4.2, 5.4));
+        s.say(t < 1.6 ? 'Greedy heroes leave the road for it…' : t < 4.2 ? '…and stand still to open it' : 'Ambushed. The gold stays yours', P.gold);
+      },
+    },
+    {
+      id: 'ghost', title: 'Ghosts of legends', show: 'catalog', dur: 6, map: ['########', 'G......#', '########'],
+      text: 'A legend who dies in your dungeon may return as a ghost where they fell (the Chosen Hero always does). Haunting ghosts frighten heroes, whispering ones feed the guild lies, vengeful ones rise as spectres and fight for you. A cleric, paladin, saint or sage can lay one to rest.',
+      play(s, t) {
+        s.base();
+        const p = 0.5 + 0.5 * Math.sin(t * 2);
+        s.c.save(); s.c.globalAlpha = 0.3 + 0.2 * p; RD.drawHero(s.c, { cls: 'chosen', tier: 6, title: 'x' }, 4 * T + T / 2, T + T / 2 - 3 * p, T * 0.9); s.c.restore();
+        s.ring(4, 1, 0.45 + 0.05 * p, 'rgba(179,139,224,0.8)', 0.6);
+        const [x] = t < 2.4 ? along([[0, 1], [2.4, 1]], ease(span(t, 0.2, 2.2))) : along([[2.4, 1], [0, 1]], ease(span(t, 2.8, 4.6)));
+        s.hero('knight', x, 1, { alpha: t > 4.6 ? 0 : 1 });
+        if (t > 2.3 && t < 3.4) s.float(2.4, 1, 'A ghost!', '#cfe3f2', span(t, 2.3, 3.4));
+        s.say(t < 2.3 ? 'The Chosen Hero fell here…' : 'Haunting: heroes lose their nerve', '#b38be0');
+      },
+    },
+    {
+      id: 'undo', title: 'Undo and saved layouts', show: 'tools', dur: 5, map: ['######', '#....#', '######'],
+      text: 'Undo (or Ctrl+Z) takes back any build action until you open the gate, with every bit of malice refunded. Layouts saves a floor and rebuilds it later in one go, paying only for what differs.',
+      play(s, t) {
+        s.base();
+        const placed = t > 0.8 && t < 2.8;
+        if (placed) s.piece('goblin', 3, 1);
+        s.chip(0.1, 0, 'Undo', P.bone, t > 2.4 && t < 3);
+        s.chip(1.7, 0, 'Layouts', P.gold, t > 3.6);
+        if (t < 2.2) s.cursor(3, 1, span(t, 0.4, 0.9)); else if (t < 3.4) s.cursor(0.6, 0, span(t, 2.4, 2.9)); else s.cursor(2.6, 0, span(t, 3.8, 4.3));
+        s.float(3, 1, '+12 back', P.maliceHi, span(t, 2.8, 3.8));
+        s.say(t < 2.4 ? 'Placed by mistake?' : t < 3.6 ? 'Undo: every malice back' : 'Layouts: save and rebuild a floor');
+      },
+    },
+    {
       id: 'combo', title: 'Combos', show: 'catalog', dur: 6, map: ['########', 'G......#', '########'],
       text: 'Some pieces work together. A hero pinned by a Bear Trap takes +50% from a Dart Slit (Skewered); a slowed hero takes double from a crushing trap (Shatter). The first time you pull one off it is added to the Guide’s Combos tab, where the rest are hinted.',
       play(s, t) {
